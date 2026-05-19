@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>NEON DRIVE - MULTIPLAYER</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="game-container">
+        
+        <div id="hud">
+            <div class="hud-top">
+                <div class="hud-item"><div class="hud-label">SCORE</div><div id="score-txt" class="hud-val">00000</div></div>
+                <div class="hud-item" style="text-align: right;"><div class="hud-label">SPEED</div><div id="speed-txt" class="hud-val">0 KMH</div></div>
+            </div>
+            <div class="nitro-container">
+                <div class="nitro-title">NITRO</div>
+                <div class="nitro-bar-bg"><div id="nitro-bar-fill" class="nitro-bar-fill"></div></div>
+                <div id="nitro-percent-txt" class="nitro-percent">0%</div>
+            </div>
+        </div>
+        <div id="shoot-btn-left" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
+        <div id="shoot-btn-right" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
+        <div id="joystick-container"><div id="joystick-knob"></div></div>
+
+        <div id="start-screen" class="overlay">
+            <h1>NEON DRIVE</h1>
+            <div class="subtitle">MULTIPLAYER EDITION</div>
+            
+            <div class="lobby-box">
+                <input type="text" id="player-name" class="lobby-input" placeholder="Enter Your Name" autocomplete="off">
+                <button class="btn-main" onclick="createRoom()">CREATE ROOM</button>
+            </div>
+            
+            <div class="subtitle" style="margin: 5px 0;">- OR -</div>
+            
+            <div class="lobby-box">
+                <input type="text" id="room-code-input" class="lobby-input" placeholder="4-Digit Room Code" autocomplete="off">
+                <button class="btn-main btn-join" onclick="joinRoom()">JOIN ROOM</button>
+            </div>
+            
+            <button class="btn-small" onclick="playSolo()" style="margin-top: 10px;">Play Solo Practice</button>
+        </div>
+
+        <div id="waiting-screen" class="overlay hidden">
+            <h1>ROOM CODE: <span id="display-room-code" style="color:#00ff66;"></span></h1>
+            <div class="subtitle" style="margin-bottom:10px;">WAITING FOR DRIVERS...</div>
+            
+            <div class="lobby-box" style="text-align: left; min-height: 150px;">
+                <ul id="players-list" style="list-style:none; color: #fff; font-size:1.1rem; line-height:1.8;"></ul>
+            </div>
+
+            <button id="btn-start" class="btn-main btn-start-game" onclick="startMultiplayerGame()" style="display:none;">START RACE</button>
+            <div id="waiting-msg" style="color: #00f0ff; margin-top:15px; font-weight:bold;">Waiting for host to start...</div>
+        </div>
+
+        <div id="gameover-screen" class="overlay hidden">
+            <h1 style="background: linear-gradient(45deg, #ff0000, #ff5500);">WRECKED</h1>
+            <div class="subtitle" id="final-score-lbl">FINAL SCORE: 0</div>
+            <div class="button-group">
+                <button class="btn-small btn-home" onclick="location.reload()">Lobby</button>
+                <button class="btn-small" onclick="restartGame()">Try Again</button>
+            </div>
+        </div>
+
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
+    
+    <script src="script.js"></script>
+</body>
+</html>
