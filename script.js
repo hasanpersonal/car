@@ -167,26 +167,38 @@ function playSolo() {
     initGameAndFullscreen();
 }
 
-// Update Distance Live Progress Dots
+// --- ALL PLAYERS LIVE DISTANCE PROGRESS UI ---
 function updateDistanceTrackerUI() {
     if (!opponentsData) return;
     const laneBg = document.getElementById('tracker-lanes');
     laneBg.innerHTML = "";
     
-    // Find highest score to calculate max distance bounds
+    // নিজের লাইভ কিলোমিটার মেইন স্ক্রিনে দেখানো
+    if (opponentsData[myId]) {
+        let myKM = (opponentsData[myId].score / 1000).toFixed(2);
+        const kmTxtEl = document.getElementById('km-txt');
+        if(kmTxtEl) kmTxtEl.innerText = `${myKM} KM`;
+    }
+
     let scores = Object.keys(opponentsData).map(id => opponentsData[id].score);
-    let maxScore = Math.max(...scores, 1000); // safety fallback
+    let maxScore = Math.max(...scores, 1000); 
 
     Object.keys(opponentsData).forEach(id => {
         let p = opponentsData[id];
+        let playerKM = (p.score / 1000).toFixed(2);
+        
         let dot = document.createElement('div');
         dot.className = "player-progress-dot";
         dot.style.color = p.color || '#00f0ff';
         dot.style.backgroundColor = p.color || '#00f0ff';
         
-        // Calculate percentages relative to leading vehicle
-        let progressPercent = (p.score / maxScore) * 90; // clamp within 90% view boundary
+        // শতকরা হিসাব করে পজিশন সেট করা (লেখা যেন কেটে না যায় তাই ৮2% এ ক্লাম্প করা)
+        let progressPercent = (p.score / maxScore) * 82; 
         dot.style.left = `${progressPercent}%`;
+        
+        // ডটের ঠিক উপরে নাম ও কিলোমিটারের ভাসমান ট্যাগ (সবারটা সবাই দেখবে)
+        dot.innerHTML = `<span style="position:absolute; top:-20px; left:-12px; font-size:9px; color:#fff; white-space:nowrap; background:rgba(0,0,0,0.75); padding:1px 4px; border-radius:3px; border:1px solid ${p.color || '#00f0ff'}">${p.name.substring(0,3)}: ${playerKM}K</span>`;
+        
         laneBg.appendChild(dot);
     });
 }
@@ -326,6 +338,9 @@ class Player {
         if(this.x < 22) { this.x = 22; this.vx = 0; }
         if(this.x > gameWidth - 22 - this.w) { this.x = gameWidth - 22 - this.w; this.vx = 0; }
         if(speed > 40 && Math.random() < 0.6) particles.push(new Particle(this.x + this.w/2, this.y + this.h, isNitro ? '#00f0ff' : '#ff0055', -speed*0.03, Math.random()*4+1));
+        
+        // ক্র্যাশ করে পেছনে যাওয়ার পর গাড়িটিকে স্মুথলি আবার তার ডিফল্ট পজিশনে ফিরিয়ে আনা
+        this.y += ((gameHeight - 160) - this.y) * 0.05;
     }
     draw() {
         ctx.save(); ctx.translate(this.x + this.w/2, this.y + this.h/2); ctx.rotate(this.angle);
@@ -393,7 +408,6 @@ function restartGame() {
     document.getElementById('gameover-screen').classList.add('hidden');
     document.getElementById('leaderboard-box').style.display = 'none';
 
-    // Start 60 Seconds Countdown Timer
     if(timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
         if(gameActive) {
@@ -406,7 +420,6 @@ function restartGame() {
     }, 1000);
 }
 
-// Executed when 60s is complete
 function endRaceDuration() {
     gameActive = false;
     clearInterval(timerInterval);
@@ -423,13 +436,18 @@ function endRaceDuration() {
     hud.style.display = 'none';
 }
 
+// --- CRASH SYSTEM (KNOCKBACK BACKWARD) ---
 function triggerCrash() {
-    // Car crash deducts score/speed penalty instead of direct hard gameover to let them play full 60s
     screenShake = 30;
     screenFlash = 0.5;
     playSfx(120, 'sawtooth', 0.5, 0.4);
-    score = Math.max(0, score - 300);
+    
+    // স্কোর কিছুটা কমিয়ে দেওয়া যাতে অন্য প্লেয়ারদের তুলনায় ট্র্যাকিং বারে পেছনে চলে যায়
+    score = Math.max(0, score - 800); 
     speed = 0;
+    
+    // গাড়িটিকে স্ক্রিনে ১২০ পিক্সেল পেছনে (নিচের দিকে) ধাক্কা দেওয়া
+    player.y = Math.min(gameHeight - 80, player.y + 120); 
 }
 
 function showFinalLeaderboard() {
@@ -438,7 +456,6 @@ function showFinalLeaderboard() {
     list.innerHTML = "";
     box.style.display = 'block';
 
-    // Sort players list based on highest score reached
     let playersArr = Object.keys(opponentsData).map(id => opponentsData[id]);
     playersArr.sort((a, b) => b.score - a.score);
 
