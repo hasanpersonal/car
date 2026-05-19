@@ -537,7 +537,8 @@ function render() {
         let brakeReq = (joyActive && joyDY > 14) || keys.s; 
         isNitro = nitroReq && nitro > 0;
         
-        if(isNitro) { targetSpeed = 270; nitro -= 0.12; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
+        // --- UPGRADED LINE (LINE 424): Nitro Speed set to 370 & Burn Rate set to 0.24 ---
+        if(isNitro) { targetSpeed = 370; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
         else if (brakeReq) targetSpeed = 60; else targetSpeed = 130; 
 
         speed += (targetSpeed - speed) * 0.08;
