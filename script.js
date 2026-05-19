@@ -106,6 +106,13 @@ function listenToRoom() {
         if(!data) return;
 
         if (data.status === "waiting") {
+            // রুমে ব্যাক করার পর গেম ওভার স্ক্রিন হাইড করে ওয়েটিং স্ক্রিন চালু করা
+            document.getElementById('gameover-screen').classList.add('hidden');
+            document.getElementById('waiting-screen').classList.remove('hidden');
+            hud.style.display = 'none';
+            btnLeft.style.display = 'none';
+            btnRight.style.display = 'none';
+
             const list = document.getElementById('players-list');
             list.innerHTML = "";
             Object.keys(data.players).forEach(pid => {
@@ -135,7 +142,6 @@ function listenToRoom() {
             opponentsData = data.players;
             updateDistanceTrackerUI();
             
-            // Fix: Show leaderboard if finished, preventing game from auto-restarting
             if(data.status === "finished" && !gameActive) {
                 showFinalLeaderboard();
             }
@@ -161,7 +167,12 @@ function sendChatMessage() {
 }
 
 function startMultiplayerGame() {
-    database.ref('car_rooms/' + currentRoom).update({ status: "playing" });
+    // পরবর্তী ম্যাচের জন্য সবার পয়েন্ট শুরুতে রিসেট করে দেওয়া
+    let updates = { status: "playing" };
+    Object.keys(opponentsData).forEach(id => {
+        updates[`players/${id}/score`] = 0;
+    });
+    database.ref('car_rooms/' + currentRoom).update(updates);
 }
 
 function playSolo() {
@@ -421,18 +432,43 @@ function endRaceDuration() {
     
     document.getElementById('gameover-title').innerText = "RACE FINISHED";
     document.getElementById('gameover-title').style.background = "linear-gradient(45deg, #00ff66, #ffea00)";
-    document.getElementById('final-score-lbl').innerText = `YOUR FINAL SCORE: ${Math.floor(score)}`;
     
-    // Fix: Ensure Firebase status changes to 'finished' so it doesn't trigger a restart for others
+    let myKM = (score / 1000).toFixed(2);
+    document.getElementById('final-score-lbl').innerText = `YOUR FINAL SCORE: ${Math.floor(score)} (${myKM} KM)`;
+    
     if(isMultiplayer && isHost) {
         database.ref('car_rooms/' + currentRoom).update({ status: "finished" });
     }
     
     if(isMultiplayer) {
         showFinalLeaderboard();
+    } else {
+        // সোলো গেমপ্লে ট্র্যাকিংয়ের জন্যও কিলোমিটার ডিসপ্লে
+        const box = document.getElementById('leaderboard-box');
+        const list = document.getElementById('leaderboard-list');
+        list.innerHTML = `<li><strong style="color:#00f0ff;">${myName || 'Solo Driver'}</strong> - ${Math.floor(score)} pts (${myKM} KM)</li>`;
+        box.style.display = 'block';
     }
     document.getElementById('gameover-screen').classList.remove('hidden');
     hud.style.display = 'none';
+}
+
+// --- NEW FUNCTION: BACK TO LOBBY (WITHOUT DISCONNECTING) ---
+function backToLobby() {
+    if(isMultiplayer) {
+        // হোস্ট ক্লিক করলে পুরো রুমের স্ট্যাটাসই "waiting" এ চলে যাবে এবং বাকিরা রিয়েল-টাইম লবিতে ফেরত যাবে
+        if(isHost) {
+            database.ref('car_rooms/' + currentRoom).update({ status: "waiting" });
+        } else {
+            // নরমাল জয়েন করা প্লেয়াররা জাস্ট ওয়েটিং স্ক্রিন অন করবে (হোস্ট স্ট্যাটাস চেঞ্জ করা পর্যন্ত)
+            document.getElementById('gameover-screen').classList.add('hidden');
+            document.getElementById('waiting-screen').classList.remove('hidden');
+        }
+    } else {
+        // সোলো প্র্যাকটিসের ক্ষেত্রে রিফ্রেশ না করে মেইন স্ক্রিনে ব্যাক করা
+        document.getElementById('gameover-screen').classList.add('hidden');
+        document.getElementById('start-screen').classList.remove('hidden');
+    }
 }
 
 function triggerCrash() {
@@ -455,8 +491,10 @@ function showFinalLeaderboard() {
     playersArr.sort((a, b) => b.score - a.score);
 
     playersArr.forEach((p, idx) => {
+        let pKM = (p.score / 1000).toFixed(2); // কিলোমিটার ক্যালকুলেশন
         let li = document.createElement('li');
-        li.innerHTML = `<strong style="color:${p.color || '#fff'}">${p.name}</strong> - ${Math.floor(p.score)} pts`;
+        // লিডারবোর্ডে পয়েন্টের পাশাপাশি অতিক্রান্ত দূরত্ব (KM) যুক্ত করা হয়েছে
+        li.innerHTML = `<strong style="color:${p.color || '#fff'}">${p.name}</strong> - ${Math.floor(p.score)} pts <span style="color:#00ff66; font-size:0.9rem; margin-left:8px;">(${pKM} KM)</span>`;
         list.appendChild(li);
     });
 }
