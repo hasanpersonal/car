@@ -2,106 +2,170 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>NEON DRIVE - MULTIPLAYER</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Cyber UNO Multiplayer</title>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&family=Rajdhani:wght@500;700&display=swap" rel="stylesheet">
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-database.js"></script>
 </head>
 <body>
 
-    <div id="game-container">
+    <div id="game-container" class="cyber-container">
         
-        <div id="hud">
-            <div class="hud-top">
-                <div class="hud-item"><div class="hud-label">SCORE</div><div id="score-txt" class="hud-val">00000</div></div>
-                <div class="hud-item" style="text-align: center;"><div class="hud-label">TIME LEFT</div><div id="timer-txt" class="hud-val" style="color: #ffea00;">60s</div></div>
-                <div class="hud-item" style="text-align: right;"><div class="hud-label">SPEED</div><div id="speed-txt" class="hud-val">0 KMH</div></div>
+        <div id="start-screen" class="screen-overlay">
+            <div class="glow-logo">
+                <h1>CYBER<span>UNO</span></h1>
+                <p class="subtitle">REAL-TIME MULTIPLAYER SYSTEM</p>
             </div>
             
-            <div id="distance-tracker">
-                <div class="tracker-label" style="display: flex; justify-content: space-between;">
-                    <span>RACE PROGRESS</span>
-                    <span id="km-txt" style="color: #00ff66;">0.00 KM</span>
+            <div class="auth-tabs">
+                <div class="input-group">
+                    <label><i class="fas fa-user-ninja"></i> Player Name</label>
+                    <input type="text" id="player-name" placeholder="Enter Cyber Name..." maxlength="12">
                 </div>
-                <div class="tracker-bg" id="tracker-lanes"></div>
-            </div>
-
-            <div class="nitro-container">
-                <div class="nitro-title">NITRO</div>
-                <div class="nitro-bar-bg"><div id="nitro-bar-fill" class="nitro-bar-fill"></div></div>
-                <div id="nitro-percent-txt" class="nitro-percent">0%</div>
-            </div>
-        </div>
-        <div id="shoot-btn-left" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
-        <div id="shoot-btn-right" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
-        <div id="joystick-container"><div id="joystick-knob"></div></div>
-
-        <div id="start-screen" class="overlay">
-            <h1>NEON DRIVE</h1>
-            <div class="subtitle">MULTIPLAYER EDITION</div>
-            
-            <div class="lobby-box">
-                <div class="slot-title">CREATE A NEW RACE</div>
-                <input type="text" id="host-name" class="lobby-input" placeholder="Enter Host Name" autocomplete="off">
-                <button class="btn-main" onclick="createRoom()">CREATE ROOM</button>
-            </div>
-            
-            <div class="subtitle" style="margin: 5px 0;">- OR -</div>
-            
-            <div class="lobby-box">
-                <div class="slot-title">JOIN EXISTING RACE</div>
-                <input type="text" id="joiner-name" class="lobby-input" placeholder="Enter Player Name" autocomplete="off">
-                <input type="text" id="room-code-input" class="lobby-input" placeholder="4-Digit Room Code" autocomplete="off" style="margin-top: 8px;">
-                <button class="btn-main btn-join" onclick="joinRoom()">JOIN ROOM</button>
-            </div>
-            
-            <button class="btn-small" onclick="playSolo()" style="margin-top: 10px;">Play Solo Practice</button>
-            <div class="page-footer">was designed by imrul hasan, credit: Gemini</div>
-        </div>
-
-        <div id="waiting-screen" class="overlay hidden">
-            <h1>ROOM CODE: <span id="display-room-code" style="color:#00ff66;"></span></h1>
-            <div class="subtitle" style="margin-bottom:10px;">WAITING FOR DRIVERS...</div>
-            
-            <div class="lobby-box" style="text-align: left; height: 120px; overflow-y: auto;">
-                <ul id="players-list" style="list-style:none; color: #fff; font-size:1.1rem; line-height:1.8;"></ul>
-            </div>
-
-            <div class="lobby-box" style="text-align: left; height: 180px; display: flex; flex-direction: column;">
-                <div id="chat-messages" style="flex-grow: 1; overflow-y: auto; color: #00f0ff; font-size: 0.9rem; margin-bottom: 8px; padding-right: 5px;"></div>
-                <div style="display: flex; gap: 5px;">
-                    <input type="text" id="chat-input" placeholder="Type a message..." style="flex-grow: 1; padding: 8px; border-radius: 4px; border: 1px solid #333; background: #000; color: #fff;[...]
-                    <button onclick="sendChatMessage()" style="padding: 8px 15px; border-radius: 4px; border: none; background: #00f0ff; color: #000; font-weight: bold; cursor: pointer; font-size:[...]
+                
+                <div class="action-box">
+                    <div class="host-panel">
+                        <button onclick="createUnoRoom()" class="btn-premium host-btn">
+                            <i class="fas fa-plus-circle"></i> Create Cyber Room
+                        </button>
+                    </div>
+                    
+                    <div class="divider"><span>OR</span></div>
+                    
+                    <div class="join-panel">
+                        <input type="number" id="room-code-input" placeholder="4-Digit Room Code">
+                        <button onclick="joinUnoRoom(false)" class="btn-premium join-btn">
+                            <i class="fas fa-sign-in-alt"></i> Join as Player
+                        </button>
+                        <button onclick="joinUnoRoom(true)" class="btn-premium spectator-btn-init">
+                            <i class="fas fa-eye"></i> Watch as Spectator
+                        </button>
+                    </div>
                 </div>
             </div>
-
-            <div class="button-group" style="justify-content: center; gap: 10px;">
-                <button id="btn-start" class="btn-main btn-start-game" onclick="startMultiplayerGame()" style="display:none;">START RACE</button>
-                <button id="btn-leave" class="btn-main" onclick="leaveRoom()" style="display:none; background: #ff0055;">LEAVE ROOM</button>
-            </div>
-            <div id="waiting-msg" style="color: #00f0ff; margin-top:15px; font-weight:bold;">Waiting for host to start...</div>
-            <div class="page-footer">was designed by imrul hasan, credit: Gemini</div>
         </div>
 
-        <div id="gameover-screen" class="overlay hidden">
-            <h1 id="gameover-title" style="background: linear-gradient(45deg, #00ff66, #ffea00); -webkit-background-clip: text; -webkit-text-fill-color: transparent;">RACE FINISHED</h1>
-            <div class="subtitle" id="final-score-lbl">FINAL SCORE: 0</div>
+        <div id="waiting-screen" class="screen-overlay hidden">
+            <div class="lobby-header">
+                <h2>LOBBY CODE: <span id="display-room-code" class="text-glow">----</span></h2>
+                <span id="role-badge" class="badge">PLAYER</span>
+            </div>
             
-            <div class="lobby-box" id="leaderboard-box" style="display:none; text-align: left;">
-                <div class="slot-title" style="color:#ffea00; margin-bottom: 10px; text-align: center;">🏁 FINAL STANDINGS 🏁</div>
-                <ol id="leaderboard-list" style="padding-left: 20px; color: #fff; font-size: 1.1rem; line-height: 1.8;"></ol>
+            <div id="lobby-leaderboard" class="lobby-leaderboard-box hidden">
+                <h3><i class="fas fa-trophy"></i> LATEST STANDING</h3>
+                <ol id="lobby-leaderboard-list"></ol>
             </div>
 
-            <div class="button-group" style="justify-content: center;">
-                <button class="btn-main" onclick="backToLobby()" style="width: auto; padding: 12px 40px;">BACK TO LOBBY</button>
+            <div class="lobby-grid">
+                <div class="players-panel">
+                    <h3><i class="fas fa-users"></i> Connected Grid</h3>
+                    <ul id="players-list"></ul>
+                    <div id="waiting-msg" class="pulse-text">Waiting for Host to boot engine...</div>
+                    <button id="btn-start" class="btn-premium start-match-btn hidden" onclick="startUnoGame()">
+                        <i class="fas fa-play"></i> START MATCH
+                    </button>
+                </div>
+
+                <div class="chat-panel">
+                    <h3><i class="fas fa-comments"></i> Lobby Chat</h3>
+                    <div id="lobby-chat-messages" class="chat-box"></div>
+                    <div class="chat-input-area">
+                        <input type="text" id="lobby-chat-input" placeholder="Type transmission...">
+                        <button onclick="sendChatMessage('lobby')"><i class="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
             </div>
-            <div class="page-footer">was designed by imrul hasan, credit: Gemini</div>
         </div>
 
-        <canvas id="canvas"></canvas>
+        <div id="hud" class="game-hud hidden">
+            <div class="hud-header">
+                <div id="timer-box"><i class="fas fa-hourglass-half"></i> <span id="timer-txt">60s</span></div>
+                <div id="current-turn-box" class="turn-indicator">Turn: <span id="current-player-name">---</span></div>
+                <div id="direction-box"><i class="fas fa-sync-alt"></i> <span id="direction-txt">CW</span></div>
+            </div>
+
+            <div id="spectator-hud-alert" class="spec-alert hidden">
+                <i class="fas fa-eye"></i> YOU ARE WATCHING AS SPECTATOR
+            </div>
+
+            <div id="opponents-arena" class="opponents-grid"></div>
+
+            <div class="center-deck-area">
+                <div id="draw-deck" class="uno-card deck-back shadow-glow">
+                    <div class="inner-circle">UNO</div>
+                    <span id="deck-card-count" class="card-count-badge">54</span>
+                </div>
+                
+                <div id="discard-pile" class="uno-card empty-pile shadow-glow">
+                    </div>
+            </div>
+
+            <div id="ingame-chat-widget" class="ingame-chat-container">
+                <div class="ingame-chat-header" onclick="toggleIngameChat()">
+                    <span><i class="fas fa-comment-dots"></i> Match Chat</span>
+                    <i id="chat-toggle-icon" class="fas fa-chevron-up"></i>
+                </div>
+                <div id="ingame-chat-body" class="ingame-chat-body hidden">
+                    <div id="ingame-chat-messages" class="ingame-chat-box"></div>
+                    <div class="ingame-chat-input-area">
+                        <input type="text" id="ingame-chat-input" placeholder="Send tactical message...">
+                        <button onclick="sendChatMessage('ingame')"><i class="fas fa-paper-plane"></i></button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="color-chooser-overlay" class="color-overlay hidden">
+                <h4>CHOOSE CYBER MATRIX COLOR</h4>
+                <div class="color-picker-grid">
+                    <button class="color-choice btn-red" onclick="selectWildColor('red')"></button>
+                    <button class="color-choice btn-blue" onclick="selectWildColor('blue')"></button>
+                    <button class="color-choice btn-yellow" onclick="selectWildColor('yellow')"></button>
+                    <button class="color-choice btn-green" onclick="selectWildColor('green')"></button>
+                </div>
+            </div>
+
+            <div id="player-hand-section" class="player-hand-container">
+                <div class="hand-header">
+                    <span id="hand-count-lbl">YOUR MATRIX: 0 CARDS</span>
+                    <button id="uno-call-btn" class="btn-uno-shout hidden" onclick="triggerUnoShout()">UNO!</button>
+                </div>
+                <div id="player-cards-wrapper" class="cards-scroll-wrapper"></div>
+            </div>
+        </div>
+
+        <div id="gameover-screen" class="screen-overlay hidden">
+            <h1 id="gameover-title">MATCH FINISHED</h1>
+            <p id="final-winner-lbl" class="winner-announcement">WINNER: ---</p>
+            
+            <div id="leaderboard-box" class="final-score-panel">
+                <h3>FINAL RANKINGS</h3>
+                <ul id="leaderboard-list"></ul>
+            </div>
+            
+            <div class="gameover-actions">
+                <button onclick="backToLobby()" class="btn-premium lobby-back-btn">
+                    <i class="fas fa-backward"></i> RETURN TO LOBBY
+                </button>
+            </div>
+        </div>
+
+        <div id="tracker-footer" class="game-tracker-footer">
+            <div class="tracker-wrapper">
+                <div class="km-display">
+                    <span class="label">LIVE PROGRESS</span>
+                    <span id="cards-left-tracker-txt" class="value">0 LEFT</span>
+                </div>
+                <div class="tracker-lane-container">
+                    <div class="lane-line"></div>
+                    <div id="tracker-lanes" class="lane-bg"></div>
+                </div>
+            </div>
+        </div>
+
     </div>
 
-    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
-    <script src="script.js"></script>
 </body>
 </html>
