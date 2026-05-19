@@ -1,0 +1,191 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: 'Segoe UI', Roboto, sans-serif;
+    user-select: none;
+    -webkit-user-select: none;
+    touch-action: none;
+}
+
+body, html {
+    background: #000;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    color: #fff;
+}
+
+#game-container {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    max-width: 480px; 
+    max-height: 920px;
+    background: #020208;
+    overflow: hidden;
+    box-shadow: 0 0 60px rgba(0, 240, 255, 0.15);
+    perspective: 800px;
+}
+
+canvas {
+    display: block;
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    transform: rotateX(15deg) scale(1.1);
+    transform-origin: center 60%;
+    z-index: 1;
+}
+
+.overlay {
+    position: absolute;
+    top: 0; left: 0;
+    width: 100%; height: 100%;
+    background: rgba(3, 3, 10, 0.92);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    z-index: 20;
+    transition: opacity 0.4s ease;
+    padding: 30px;
+    text-align: center;
+}
+
+.overlay.hidden {
+    opacity: 0;
+    pointer-events: none;
+    display: none; 
+}
+
+h1 {
+    font-size: 2.8rem;
+    font-weight: 900;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    background: linear-gradient(45deg, #00f0ff, #ff0055, #ffea00);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin-bottom: 5px;
+    filter: drop-shadow(0 0 20px rgba(0, 240, 255, 0.5));
+}
+
+.subtitle {
+    color: #8da1d6;
+    font-size: 0.9rem;
+    margin-bottom: 20px;
+    letter-spacing: 3px;
+}
+
+.lobby-box {
+    background: rgba(5, 5, 15, 0.7);
+    border: 1px solid rgba(0, 240, 255, 0.3);
+    padding: 20px;
+    border-radius: 12px;
+    width: 100%;
+    max-width: 350px;
+    margin-bottom: 15px;
+}
+
+.lobby-input {
+    width: 100%;
+    padding: 12px;
+    margin-bottom: 10px;
+    border-radius: 6px;
+    border: 2px solid #333;
+    background: rgba(0,0,0,0.8);
+    color: #00f0ff;
+    text-align: center;
+    font-size: 1rem;
+    font-weight: bold;
+}
+.lobby-input:focus { border-color: #00f0ff; outline: none; }
+
+.btn-main {
+    padding: 14px 40px;
+    font-size: 1rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    color: #fff;
+    background: linear-gradient(45deg, #00f0ff, #ff0055);
+    border: none;
+    border-radius: 50px;
+    cursor: pointer;
+    box-shadow: 0 0 20px rgba(0, 240, 255, 0.4);
+    transition: transform 0.2s;
+    width: 100%;
+    margin-top: 5px;
+}
+.btn-main:active { transform: scale(0.92); }
+
+.btn-join { background: linear-gradient(45deg, #a200ff, #00f0ff); }
+.btn-start-game { background: linear-gradient(45deg, #00ff66, #ffea00); color: #000; box-shadow: 0 0 20px rgba(0, 255, 102, 0.5); }
+
+.button-group { display: flex; gap: 15px; margin-top: 20px; }
+
+.btn-small {
+    padding: 12px 25px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    text-transform: uppercase;
+    border: 2px solid #ffea00;
+    background: rgba(255, 234, 0, 0.1);
+    color: #fff;
+    border-radius: 8px;
+    cursor: pointer;
+}
+.btn-home { border-color: #00f0ff; background: rgba(0, 240, 255, 0.1); }
+
+#hud { position: absolute; top: 20px; left: 15px; right: 15px; z-index: 10; pointer-events: none; display: none; }
+.hud-top { display: flex; justify-content: space-between; margin-bottom: 12px; }
+.hud-item {
+    background: rgba(5, 5, 15, 0.75); border: 1px solid rgba(0, 240, 255, 0.25);
+    padding: 6px 14px; border-radius: 6px; backdrop-filter: blur(10px);
+}
+.hud-label { font-size: 0.6rem; color: #8da1d6; letter-spacing: 2px; font-weight: bold; }
+.hud-val { font-size: 1.3rem; font-weight: 900; color: #fff; font-family: monospace; text-shadow: 0 0 8px #00f0ff; }
+
+.nitro-container {
+    display: flex; align-items: center; background: rgba(5, 5, 15, 0.7);
+    border: 1px solid rgba(255, 0, 85, 0.2); padding: 8px 12px; border-radius: 20px; gap: 10px;
+}
+.nitro-title { font-size: 0.65rem; font-weight: 900; color: #ff0055; letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,0,85,0.5); }
+.nitro-bar-bg { flex-grow: 1; height: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); }
+.nitro-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #ff0055, #ffea00, #00ff66); box-shadow: 0 0 15px #ff0055; transition: width 0.1s linear; }
+.nitro-percent { font-family: monospace; font-size: 0.85rem; font-weight: 900; color: #00f0ff; min-width: 40px; text-align: right; text-shadow: 0 0 5px #00f0ff; }
+
+.shoot-btn {
+    position: absolute; bottom: 30px; width: 82px; height: 82px;
+    background: radial-gradient(circle, #ff0055 0%, #7a0023 100%);
+    border: 3px solid #ffea00; border-radius: 50%; display: none;
+    flex-direction: column; justify-content: center; align-items: center;
+    box-shadow: 0 0 25px rgba(255, 0, 85, 0.6); cursor: pointer; z-index: 16;
+}
+#shoot-btn-left { left: 20px; } #shoot-btn-right { right: 20px; }
+.shoot-btn:active { transform: scale(0.9); }
+.shoot-btn .btn-title { font-size: 0.8rem; font-weight: 900; letter-spacing: 1px; text-shadow: 0 0 5px #fff; }
+.shoot-btn .ammo-count { font-size: 0.65rem; font-weight: bold; color: #ffea00; margin-top: 2px; }
+
+.shoot-btn.empty { background: rgba(40, 40, 40, 0.6); border-color: #555; box-shadow: none; }
+.shoot-btn.empty .btn-title { color: #666; text-shadow: none; }
+.shoot-btn.empty .ammo-count { color: #666; }
+
+#joystick-container {
+    position: absolute; width: 135px; height: 135px; background: rgba(10, 10, 25, 0.5);
+    border: 2px solid rgba(0, 240, 255, 0.5); border-radius: 50%; display: none; 
+    pointer-events: none; z-index: 15; box-shadow: 0 0 25px rgba(0, 240, 255, 0.25); transform: translate(-50%, -50%); 
+}
+#joystick-knob {
+    width: 52px; height: 52px; background: radial-gradient(circle, #00f0ff 0%, #0044ff 100%);
+    border: 3px solid #fff; border-radius: 50%; position: absolute;
+    left: calc(50% - 26px); top: calc(50% - 26px); box-shadow: 0 0 20px #00f0ff;
+}
