@@ -12,7 +12,7 @@ const firebaseConfig = {
 firebase.initializeApp(firebaseConfig);
 const database = firebase.database();
 
-// --- MULTIPLAYER VARIABLES ---
+// --- GAME & MULTIPLAYER STATE ---
 let myId = Math.random().toString(36).substr(2, 9);
 let myName = "";
 let currentRoom = null;
@@ -20,14 +20,6 @@ let isHost = false;
 let opponentsData = {};
 let lastSyncTime = 0;
 let isMultiplayer = false;
-
-// --- GAME VARIABLES ---
-const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
-const gameWidth = 480;
-const gameHeight = 850;
-canvas.width = gameWidth;
-canvas.height = gameHeight;
 
 let gameActive = false;
 let score = 0, speed = 0, targetSpeed = 0;
@@ -37,7 +29,17 @@ let screenShake = 0, roadOffset = 0, screenFlash = 0;
 let player;
 let enemies = [], stars = [], activeBullets = [], particles = [];
 
-// UI Elements
+// Race Timer System
+let raceTimeLeft = 60; 
+let timerInterval = null;
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+const gameWidth = 480;
+const gameHeight = 850;
+canvas.width = gameWidth;
+canvas.height = gameHeight;
+
 const hud = document.getElementById('hud');
 const btnLeft = document.getElementById('shoot-btn-left');
 const btnRight = document.getElementById('shoot-btn-right');
@@ -50,10 +52,10 @@ const maxRange = 55;
 let lastTapTime = 0; 
 let audioCtx, engineOsc, engineGain;
 
-// --- MULTIPLAYER LOGIC ---
+// --- MULTIPLAYER ROOM SYSTEMS ---
 function createRoom() {
-    myName = document.getElementById('player-name').value.trim();
-    if(!myName) return alert("Enter your name!");
+    myName = document.getElementById('host-name').value.trim();
+    if(!myName) return alert("Enter Host Name!");
     
     currentRoom = Math.floor(1000 + Math.random() * 9000).toString();
     isHost = true;
@@ -77,14 +79,14 @@ function createRoom() {
 }
 
 function joinRoom() {
-    myName = document.getElementById('player-name').value.trim();
+    myName = document.getElementById('joiner-name').value.trim();
     currentRoom = document.getElementById('room-code-input').value.trim();
-    if(!myName || !currentRoom) return alert("Enter Name and Room Code!");
+    if(!myName || !currentRoom) return alert("Enter Player Name and Room Code!");
     isMultiplayer = true;
 
     database.ref('car_rooms/' + currentRoom).once('value', snapshot => {
         if(!snapshot.exists()) return alert("Room not found!");
-        if(snapshot.val().status !== "waiting") return alert("Game already running!");
+        if(snapshot.val().status !== "waiting") return alert("Game already running/ended!");
         
         let c = ['#a200ff', '#ff00aa', '#ffea00', '#00ff66'][Math.floor(Math.random()*4)];
         
@@ -105,6 +107,7 @@ function listenToRoom() {
         if(!data) return;
 
         if (data.status === "waiting") {
+            // Update Player List
             const list = document.getElementById('players-list');
             list.innerHTML = "";
             Object.keys(data.players).forEach(pid => {
@@ -112,6 +115,20 @@ function listenToRoom() {
                 li.innerText = "🏎️ " + data.players[pid].name + (pid === data.hostId ? " (Host)" : "");
                 list.appendChild(li);
             });
+
+            // Update Text Chat
+            const chatBox = document.getElementById('chat-messages');
+            chatBox.innerHTML = "";
+            if (data.chats) {
+                Object.keys(data.chats).forEach(msgId => {
+                    let msg = data.chats[msgId];
+                    let p = document.createElement('p');
+                    p.style.marginBottom = "4px";
+                    p.innerHTML = `<strong style="color:#ff0055;">${msg.sender}:</strong> <span style="color:#fff;">${msg.text}</span>`;
+                    chatBox.appendChild(p);
+                });
+                chatBox.scrollTop = chatBox.scrollHeight;
+            }
         } 
         else if (data.status === "playing" && !gameActive) {
             initGameAndFullscreen();
@@ -119,8 +136,26 @@ function listenToRoom() {
         
         if(data.players) {
             opponentsData = data.players;
+            updateDistanceTrackerUI();
         }
     });
+
+    document.getElementById('chat-input').addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') sendChatMessage();
+    });
+}
+
+function sendChatMessage() {
+    const input = document.getElementById('chat-input');
+    const msgText = input.value.trim();
+    if (!msgText) return;
+
+    database.ref('car_rooms/' + currentRoom + '/chats').push({
+        sender: myName,
+        text: msgText,
+        timestamp: Date.now()
+    });
+    input.value = "";
 }
 
 function startMultiplayerGame() {
@@ -132,7 +167,31 @@ function playSolo() {
     initGameAndFullscreen();
 }
 
-// --- GAME SYSTEM ---
+// Update Distance Live Progress Dots
+function updateDistanceTrackerUI() {
+    if (!opponentsData) return;
+    const laneBg = document.getElementById('tracker-lanes');
+    laneBg.innerHTML = "";
+    
+    // Find highest score to calculate max distance bounds
+    let scores = Object.keys(opponentsData).map(id => opponentsData[id].score);
+    let maxScore = Math.max(...scores, 1000); // safety fallback
+
+    Object.keys(opponentsData).forEach(id => {
+        let p = opponentsData[id];
+        let dot = document.createElement('div');
+        dot.className = "player-progress-dot";
+        dot.style.color = p.color || '#00f0ff';
+        dot.style.backgroundColor = p.color || '#00f0ff';
+        
+        // Calculate percentages relative to leading vehicle
+        let progressPercent = (p.score / maxScore) * 90; // clamp within 90% view boundary
+        dot.style.left = `${progressPercent}%`;
+        laneBg.appendChild(dot);
+    });
+}
+
+// --- CORE GAME ENGINE ---
 function initGameAndFullscreen() {
     let container = document.getElementById('game-container');
     if (container.requestFullscreen) container.requestFullscreen().catch(()=>{});
@@ -167,6 +226,7 @@ function playSfx(freq, type, dur, vol) {
     osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + dur);
 }
 
+// Input listeners
 const gameContainer = document.getElementById('game-container');
 gameContainer.addEventListener('touchstart', (e) => {
     if (!gameActive) return;
@@ -327,18 +387,66 @@ function restartGame() {
     player = new Player();
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = 0; bullets = 0;
+    raceTimeLeft = 60; 
     gameActive = true; joyActive = false; joyTouchId = null; screenFlash = 0;
     joyContainer.style.display = 'none'; updateAmmoUI();
     document.getElementById('gameover-screen').classList.add('hidden');
+    document.getElementById('leaderboard-box').style.display = 'none';
+
+    // Start 60 Seconds Countdown Timer
+    if(timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+        if(gameActive) {
+            raceTimeLeft--;
+            document.getElementById('timer-txt').innerText = `${raceTimeLeft}s`;
+            if(raceTimeLeft <= 0) {
+                endRaceDuration();
+            }
+        }
+    }, 1000);
+}
+
+// Executed when 60s is complete
+function endRaceDuration() {
+    gameActive = false;
+    clearInterval(timerInterval);
+    if(engineGain) engineGain.gain.setValueAtTime(0, audioCtx.currentTime);
+    
+    document.getElementById('gameover-title').innerText = "RACE FINISHED";
+    document.getElementById('gameover-title').style.background = "linear-gradient(45deg, #00ff66, #ffea00)";
+    document.getElementById('final-score-lbl').innerText = `YOUR FINAL SCORE: ${Math.floor(score)}`;
+    
+    if(isMultiplayer) {
+        showFinalLeaderboard();
+    }
+    document.getElementById('gameover-screen').classList.remove('hidden');
+    hud.style.display = 'none';
 }
 
 function triggerCrash() {
-    gameActive = false; screenShake = 30;
-    playSfx(120, 'sawtooth', 0.8, 0.4);
-    if(engineGain) engineGain.gain.setValueAtTime(0, audioCtx.currentTime);
-    document.getElementById('final-score-lbl').innerText = `FINAL SCORE: ${Math.floor(score)}`;
-    document.getElementById('gameover-screen').classList.remove('hidden');
-    hud.style.display = 'none';
+    // Car crash deducts score/speed penalty instead of direct hard gameover to let them play full 60s
+    screenShake = 30;
+    screenFlash = 0.5;
+    playSfx(120, 'sawtooth', 0.5, 0.4);
+    score = Math.max(0, score - 300);
+    speed = 0;
+}
+
+function showFinalLeaderboard() {
+    const box = document.getElementById('leaderboard-box');
+    const list = document.getElementById('leaderboard-list');
+    list.innerHTML = "";
+    box.style.display = 'block';
+
+    // Sort players list based on highest score reached
+    let playersArr = Object.keys(opponentsData).map(id => opponentsData[id]);
+    playersArr.sort((a, b) => b.score - a.score);
+
+    playersArr.forEach((p, idx) => {
+        let li = document.createElement('li');
+        li.innerHTML = `<strong style="color:${p.color || '#fff'}">${p.name}</strong> - ${Math.floor(p.score)} pts`;
+        list.appendChild(li);
+    });
 }
 
 function drawOpponents() {
@@ -454,8 +562,8 @@ function render() {
     for(let i = enemies.length - 1; i >= 0; i--) {
         enemies[i].update(); enemies[i].draw();
         if(gameActive && player && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
-            for(let k=0; k<40; k++) particles.push(new Particle(player.x+player.w/2, player.y+player.h/2, '#ff5500', (Math.random()-0.5)*16, Math.random()*7+2));
             triggerCrash();
+            enemies.splice(i, 1); continue;
         }
         if(enemies[i].y > gameHeight + 100) { enemies.splice(i, 1); if(gameActive) score += 30; }
     }
