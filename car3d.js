@@ -353,7 +353,12 @@ export function acquireCar(style, color) {
     return list.pop() || buildCar(style, color);
 }
 export function releaseCar(car) {
+    /* Reset the transform: a car recycled out of a wreck animation would
+       otherwise reappear mid-tumble, tilted and shrunken, as traffic. */
     car.visible = false;
+    car.position.set(0, 0, 0);
+    car.rotation.set(0, 0, 0);
+    car.scale.setScalar(1);
     const key = car.userData.handle.style + '|' + car.userData.handle.color;
     (pool[key] || (pool[key] = [])).push(car);
 }

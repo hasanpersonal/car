@@ -28,7 +28,10 @@ let gameActive = false;
 let score = 0, speed = 0, targetSpeed = 0;
 let nitro = 0, bullets = 0; 
 let isNitro = false;
-let screenShake = 0, roadOffset = 0, screenFlash = 0; 
+let screenShake = 0, roadOffset = 0, screenFlash = 0;
+/* frames the car sits dead still after a crash before it picks up again */
+let crashStun = 0;
+const CRASH_STUN = 36;                    // ~0.6s at 60fps
 
 /* --- skills: both cost 5 ammo --- */
 const SKILL_COST = 5;
@@ -526,7 +529,7 @@ function parseColor(c) {
 function restartGame() {
     player = new Player();
     enemies = []; stars = []; particles = []; activeBullets = [];
-    score = 0; speed = 0; nitro = 0; bullets = 0;
+    score = 0; speed = 0; nitro = 0; bullets = 0; crashStun = 0;
     raceTimeLeft = 60; 
     gameActive = true; joyActive = false; joyTouchId = null; screenFlash = 0;
     ghostActive = false; ghostTimer = 0;
@@ -618,6 +621,7 @@ function triggerCrash() {
 
     score = Math.max(0, score - 800); 
     speed = 0;
+    crashStun = CRASH_STUN;              // the car sits at 0 KMH before it picks up
     player.y = Math.min(gameHeight - 80, player.y + 120); 
 }
 
@@ -673,6 +677,10 @@ function render() {
         // --- Nitro Speed set to 560 & Burn Rate set to 0.24 ---
         if(isNitro) { targetSpeed = 560; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
         else if (brakeReq) targetSpeed = 80; else targetSpeed = 210; 
+
+        /* a crash stops the car dead: no throttle, no nitro burn, 0 KMH on the
+           clock for CRASH_STUN frames, then it accelerates away again */
+        if(crashStun > 0) { crashStun--; isNitro = false; targetSpeed = 0; }
 
         speed += (targetSpeed - speed) * 0.08;
         score += (speed * 0.015);

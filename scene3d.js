@@ -505,8 +505,10 @@ export class World {
         car.visible = true;
         car.position.set(x, 0, z);
         const h = car.userData.handle;
-        car.rotation.z = -(opts.steer || 0) * 0.045;          // body roll into the turn
-        car.rotation.y = -(opts.steer || 0) * 0.10;           // and a little yaw
+        /* Full base pose every frame. rotation.x used to be touched only by the
+           crash animation below, so every crash added its tumble to the last one
+           and the car drove around permanently nose-up. */
+        car.rotation.set(0, -(opts.steer || 0) * 0.10, -(opts.steer || 0) * 0.045);
         h.setBrake(opts.brake || 0);
         h.setBoost(opts.boost || 0);
         h.spinWheels(opts.phase * 0.05, -(opts.steer || 0));
@@ -562,8 +564,8 @@ export class World {
             h.setBrake(braking);
             h.setBoost(0);
             h.spinWheels(e.phase * 0.05, e.steer || 0);
-            car.rotation.y = -(e.steer || 0) * 0.16;
-            car.rotation.z = -(e.steer || 0) * 0.03;
+            car.rotation.set(0, -(e.steer || 0) * 0.16, -(e.steer || 0) * 0.03);
+            car.scale.setScalar(1);
         }
         for (let i = list.length; i < this.enemyPool.length; i++) {
             const slot = this.enemyPool[i];
@@ -686,7 +688,8 @@ export class World {
             const car = slot.car;
             car.visible = true;
             car.position.set(g.wx, 0, g.wz);
-            car.rotation.y = -(g.steer || 0) * 0.12;
+            car.rotation.set(0, -(g.steer || 0) * 0.12, 0);
+            car.scale.setScalar(1);
             const h = car.userData.handle;
             h.setBrake(0); h.setBoost(0);
             h.spinWheels(phase * 0.05, g.steer || 0);
