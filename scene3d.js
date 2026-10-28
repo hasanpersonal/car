@@ -205,15 +205,6 @@ export class World {
         this.camera.updateProjectionMatrix();
     }
 
-    /* ---------------------------------------------------------------- */
-    setFovBoost(v) {
-        const fov = CAM.fov + v * 12;
-        if (Math.abs(this.camera.fov - fov) > 0.01) {
-            this.camera.fov = fov;
-            this.camera.updateProjectionMatrix();
-        }
-    }
-
     /* ---------------------------------------------------------------- *
      *  per-frame sync
      * ---------------------------------------------------------------- */
@@ -296,8 +287,10 @@ export class World {
             const f = 0.75 + Math.random() * 0.5;
             h.flames.forEach(fl => fl.scale.set(0.8, f, 0.8));
         }
-        /* ---- chase camera: fixed rig that follows the car sideways ---- */
-        const pull = 1 - (opts.boost || 0) * 0.05;            // slight dolly under nitro
+        /* ---- chase camera: fixed rig that follows the car sideways ----
+           Deliberately NOT tied to nitro. The livery swaps to cyan under
+           boost and the camera used to widen and pull back at the same
+           moment, which read as the camera "changing with the colour". */
         /* Follow by CAM.follow, but never let the car slide off the edge of a
            very narrow screen: clamp how far the car may sit from the camera
            axis to what the current aspect can actually show. */
@@ -305,7 +298,7 @@ export class World {
         const limit = Math.max(0, halfExtent * 0.92 - CAR.W * 0.5 - 4);
         const off = Math.max(-limit, Math.min(limit, x * (1 - CAM.follow)));
         const cx = x - off;
-        this.camera.position.set(cx + this.camShake.x, CAM.camY * pull + this.camShake.y, z + CAM.camZ * pull);
+        this.camera.position.set(cx + this.camShake.x, CAM.camY + this.camShake.y, z + CAM.camZ);
         this.camera.lookAt(cx, CAM.lookY, z + CAM.lookZ);
     }
 

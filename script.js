@@ -587,9 +587,9 @@ function render() {
         isNitro = nitroReq && nitro > 0;
         brakeActive = brakeReq;
         
-        // --- UPGRADED LINE (LINE 424): Nitro Speed set to 370 & Burn Rate set to 0.24 ---
-        if(isNitro) { targetSpeed = 370; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
-        else if (brakeReq) targetSpeed = 60; else targetSpeed = 130; 
+        // --- Nitro Speed set to 480 & Burn Rate set to 0.24 ---
+        if(isNitro) { targetSpeed = 480; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
+        else if (brakeReq) targetSpeed = 80; else targetSpeed = 170; 
 
         speed += (targetSpeed - speed) * 0.08;
         score += (speed * 0.015);
@@ -617,7 +617,6 @@ function render() {
 
     if(world) {
         world.scrollRoad(roadOffset);
-        world.setFovBoost(isNitro ? 1 : 0);
         world.addShake(screenShake);
     }
 

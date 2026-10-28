@@ -162,37 +162,48 @@ h1 {
 }
 .btn-home { border-color: #00f0ff; background: rgba(0, 240, 255, 0.1); }
 
-#hud { position: absolute; top: 20px; left: 15px; right: 15px; z-index: 10; pointer-events: none; display: none; }
-.hud-top { display: flex; justify-content: space-between; margin-bottom: 8px; }
+#hud { position: absolute; top: 12px; left: 12px; right: 12px; z-index: 10; pointer-events: none; display: none; }
+.hud-top { display: flex; justify-content: space-between; margin-bottom: 6px; }
+/* Glass HUD: the road ahead stays visible through every readout. Drop the
+   backdrop-filter lines below if a very old phone struggles with them. */
 .hud-item {
-    background: rgba(5, 5, 15, 0.75); border: 1px solid rgba(0, 240, 255, 0.25);
-    padding: 6px 14px; border-radius: 6px; backdrop-filter: blur(10px);
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.42) 0%, rgba(5, 5, 15, 0.18) 100%);
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    padding: 4px 12px; border-radius: 6px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
 }
-.hud-label { font-size: 0.6rem; color: #8da1d6; letter-spacing: 2px; font-weight: bold; }
-.hud-val { font-size: 1.2rem; font-weight: 900; color: #fff; font-family: monospace; text-shadow: 0 0 8px #00f0ff; }
+.hud-label {
+    font-size: 0.6rem; color: #a8bce8; letter-spacing: 2px; font-weight: bold;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+.hud-val {
+    font-size: 1.2rem; font-weight: 900; color: #fff; font-family: monospace;
+    text-shadow: 0 0 8px #00f0ff, 0 2px 5px rgba(0, 0, 0, 0.95);
+}
 
 /* Distance Tracker Design */
 #distance-tracker {
-    background: rgba(5, 5, 15, 0.75);
-    border: 1px solid rgba(0, 240, 255, 0.2);
-    padding: 6px 12px;
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.40) 0%, rgba(5, 5, 15, 0.16) 100%);
+    border: 1px solid rgba(0, 240, 255, 0.22);
+    padding: 5px 10px;
     border-radius: 8px;
-    margin-bottom: 8px;
-    backdrop-filter: blur(10px);
+    margin-bottom: 6px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
 }
 .tracker-label {
     font-size: 0.55rem;
-    color: #8da1d6;
+    color: #a8bce8;
     letter-spacing: 1.5px;
     font-weight: bold;
     margin-bottom: 4px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
 }
 .tracker-bg {
     position: relative;
     height: 16px;
-    background: rgba(255,255,255,0.05);
+    background: rgba(0, 0, 0, 0.32);
     border-radius: 4px;
-    border: 1px solid rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.16);
 }
 .player-progress-dot {
     position: absolute;
@@ -205,13 +216,15 @@ h1 {
 }
 
 .nitro-container {
-    display: flex; align-items: center; background: rgba(5, 5, 15, 0.7);
-    border: 1px solid rgba(255, 0, 85, 0.2); padding: 8px 12px; border-radius: 20px; gap: 10px;
+    display: flex; align-items: center;
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.38) 0%, rgba(5, 5, 15, 0.16) 100%);
+    border: 1px solid rgba(255, 0, 85, 0.28); padding: 6px 12px; border-radius: 20px; gap: 10px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
 }
-.nitro-title { font-size: 0.65rem; font-weight: 900; color: #ff0055; letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,0,85,0.5); }
-.nitro-bar-bg { flex-grow: 1; height: 10px; background: rgba(255, 255, 255, 0.05); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.1); }
+.nitro-title { font-size: 0.65rem; font-weight: 900; color: #ff0055; letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,0,85,0.5), 0 1px 3px rgba(0,0,0,0.95); }
+.nitro-bar-bg { flex-grow: 1; height: 10px; background: rgba(0, 0, 0, 0.35); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.15); }
 .nitro-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #ff0055, #ffea00, #00ff66); box-shadow: 0 0 15px #ff0055; transition: width 0.1s linear; }
-.nitro-percent { font-family: monospace; font-size: 0.85rem; font-weight: 900; color: #00f0ff; min-width: 40px; text-align: right; text-shadow: 0 0 5px #00f0ff; }
+.nitro-percent { font-family: monospace; font-size: 0.85rem; font-weight: 900; color: #00f0ff; min-width: 40px; text-align: right; text-shadow: 0 0 5px #00f0ff, 0 1px 3px rgba(0,0,0,0.95); }
 
 .shoot-btn {
     position: absolute; bottom: 30px; width: 82px; height: 82px;
