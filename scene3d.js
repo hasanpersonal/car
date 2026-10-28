@@ -177,9 +177,9 @@ export class World {
         this.starPool = [];
         this.ghostPool = [];
 
-        this.bulletGeo = new THREE.BoxGeometry(5, 5, 24);
+        this.bulletGeo = new THREE.BoxGeometry(6, 6, 26);
         this.bulletMat = new THREE.MeshStandardMaterial({
-            color: '#ffea00', emissive: '#ffea00', emissiveIntensity: 2.6, roughness: 0.2
+            color: '#ffea00', emissive: '#ffe066', emissiveIntensity: 3.4, roughness: 0.2
         });
 
         /* particles: one Points object, rewritten every frame */
@@ -195,6 +195,231 @@ export class World {
         }));
         this.points.frustumCulled = false;
         this.scene.add(this.points);
+
+        this._buildEffects();
+    }
+
+    /* ---------------------------------------------------------------- *
+     *  crash effects: liquid spray, ground splats, shock rings, wrecks
+     * ---------------------------------------------------------------- */
+    _buildEffects() {
+        /* airborne droplets — real 3D physics, drawn as one Points cloud */
+        const MAXD = 700;
+        this.maxDrops = MAXD;
+        this.dropV = { x: new Float32Array(MAXD), y: new Float32Array(MAXD), z: new Float32Array(MAXD) };
+        this.dropLife = new Float32Array(MAXD);
+        this.dropMax = new Float32Array(MAXD);
+        this.dropRGB = new Float32Array(MAXD * 3);
+        this.dropNext = 0;
+
+        const dg = new THREE.BufferGeometry();
+        dg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAXD * 3), 3));
+        dg.setAttribute('color', new THREE.BufferAttribute(new Float32Array(MAXD * 4), 4));
+        this.dropGeo = dg;
+        this.drops = new THREE.Points(dg, new THREE.PointsMaterial({
+            size: 13, map: glowTexture(), vertexColors: true, transparent: true,
+            blending: THREE.AdditiveBlending, depthWrite: false, sizeAttenuation: true
+        }));
+        this.drops.frustumCulled = false;
+        this.scene.add(this.drops);
+
+        /* flat splats that bloom across the asphalt where the liquid lands */
+        this.splatPool = [];
+        for (let i = 0; i < 12; i++) {
+            const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
+                map: glowTexture(), transparent: true, opacity: 0,
+                blending: THREE.AdditiveBlending, depthWrite: false
+            }));
+            m.rotation.x = -Math.PI / 2;
+            m.visible = false;
+            m.userData.t = 0;
+            this.scene.add(m);
+            this.splatPool.push(m);
+        }
+
+        /* expanding shock rings */
+        this.ringPool = [];
+        const ringGeo = new THREE.RingGeometry(0.72, 1, 40);
+        for (let i = 0; i < 5; i++) {
+            const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
+                color: '#ffffff', transparent: true, opacity: 0,
+                blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+            }));
+            m.rotation.x = -Math.PI / 2;
+            m.visible = false;
+            m.userData.t = 0;
+            this.scene.add(m);
+            this.ringPool.push(m);
+        }
+
+        /* wrecked cars that tumble, sink and melt into the road */
+        this.wreckPool = [];
+        this.hitT = 0;
+    }
+
+    /* liquid burst: droplets + splats + a shock ring */
+    spawnSplatter(x, z, color, power = 1) {
+        const c = new THREE.Color(color);
+        const count = Math.round(46 * power);
+        for (let i = 0; i < count; i++) {
+            const i0 = this.dropNext;
+            this.dropNext = (this.dropNext + 1) % this.maxDrops;
+            const a = Math.random() * Math.PI * 2;
+            const sp = (2.5 + Math.random() * 11) * power;
+            this.dropV.x[i0] = Math.cos(a) * sp;
+            this.dropV.z[i0] = Math.sin(a) * sp * 0.75 - 3;      // drifts back with the road
+            this.dropV.y[i0] = 3.5 + Math.random() * 11 * power;
+            const life = 34 + Math.random() * 46;
+            this.dropLife[i0] = life;
+            this.dropMax[i0] = life;
+            const hot = Math.random() < 0.28;                     // white-hot sparks
+            this.dropRGB[i0 * 3] = hot ? 1 : Math.min(1, c.r * 1.5 + 0.15);
+            this.dropRGB[i0 * 3 + 1] = hot ? 0.95 : Math.min(1, c.g * 1.5 + 0.1);
+            this.dropRGB[i0 * 3 + 2] = hot ? 0.8 : Math.min(1, c.b * 1.5 + 0.1);
+            const pos = this.dropGeo.attributes.position.array;
+            pos[i0 * 3] = x + (Math.random() - 0.5) * 16;
+            pos[i0 * 3 + 1] = 5 + Math.random() * 14;
+            pos[i0 * 3 + 2] = z + (Math.random() - 0.5) * 20;
+        }
+        /* liquid hitting the tarmac */
+        for (let i = 0; i < 3 + Math.round(power * 2); i++) {
+            const m = this.splatPool.find(s => !s.visible) || this.splatPool[0];
+            m.visible = true;
+            m.userData.t = 0;
+            m.userData.life = 40 + Math.random() * 30;
+            m.userData.size = 26 + Math.random() * 44 * power;
+            m.material.color.set(color);
+            m.material.opacity = 0.55;
+            m.position.set(x + (Math.random() - 0.5) * 90, 0.9, z + (Math.random() - 0.5) * 70);
+        }
+        /* shock ring */
+        const r = this.ringPool.find(s => !s.visible) || this.ringPool[0];
+        r.visible = true;
+        r.userData.t = 0;
+        r.material.color.set(color);
+        r.position.set(x, 1.6, z);
+        r.scale.setScalar(12);
+    }
+
+    /* a destroyed car: tumbles away, sinks, shrinks, sprays liquid */
+    wreck(style, color, x, z, power = 1) {
+        const key = style + '|' + color;
+        let slot = this.wreckPool.find(w => !w.active && w.key === key)
+                || this.wreckPool.find(w => !w.active);
+        if (!slot) {
+            if (this.wreckPool.length >= 8) {          // recycle the oldest wreck
+                slot = this.wreckPool.reduce((a, b) => (a.t > b.t ? a : b));
+            } else {
+                slot = { key: null, car: null, active: false, t: 0 };
+                this.wreckPool.push(slot);
+            }
+        }
+        if (!slot.car || slot.key !== key) {
+            if (slot.car) { releaseCar(slot.car); this.scene.remove(slot.car); }
+            slot.car = acquireCar(style, color);
+            slot.key = key;
+            this.scene.add(slot.car);
+        }
+        slot.active = true;
+        slot.t = 0;
+        slot.power = power;
+        slot.vx = (Math.random() - 0.5) * 3.4;
+        slot.vz = -1.5 - Math.random() * 3;
+        slot.vy = 5 + Math.random() * 4;
+        slot.spinX = (Math.random() - 0.5) * 0.26;
+        slot.spinZ = (Math.random() - 0.5) * 0.26;
+        slot.spinY = (Math.random() - 0.5) * 0.15;
+        const car = slot.car;
+        car.visible = true;
+        car.scale.setScalar(1);
+        car.position.set(x, 0, z);
+        car.rotation.set(0, 0, 0);
+        this.spawnSplatter(x, z, color, power);
+    }
+
+    /* the player's own impact animation */
+    playerHit() { this.hitT = 34; }
+
+    _updateEffects() {
+        /* ---- droplets ---- */
+        const pos = this.dropGeo.attributes.position.array;
+        const col = this.dropGeo.attributes.color.array;
+        for (let i = 0; i < this.maxDrops; i++) {
+            const life = this.dropLife[i];
+            if (life <= 0) { col[i * 4 + 3] = 0; continue; }
+            this.dropLife[i] = life - 1;
+            this.dropV.y[i] -= 0.62;                       // gravity
+            this.dropV.x[i] *= 0.982;
+            this.dropV.z[i] *= 0.982;
+            pos[i * 3] += this.dropV.x[i];
+            pos[i * 3 + 1] += this.dropV.y[i];
+            pos[i * 3 + 2] += this.dropV.z[i];
+            if (pos[i * 3 + 1] < 0.7) {                    // lands: flattens and crawls
+                pos[i * 3 + 1] = 0.7;
+                this.dropV.y[i] = -this.dropV.y[i] * 0.22;
+                this.dropV.x[i] *= 0.55;
+                this.dropV.z[i] *= 0.55;
+            }
+            const k = this.dropLife[i] / this.dropMax[i];
+            col[i * 4] = this.dropRGB[i * 3];
+            col[i * 4 + 1] = this.dropRGB[i * 3 + 1];
+            col[i * 4 + 2] = this.dropRGB[i * 3 + 2];
+            col[i * 4 + 3] = Math.min(1, k * 1.35) * 0.95;
+        }
+        this.dropGeo.attributes.position.needsUpdate = true;
+        this.dropGeo.attributes.color.needsUpdate = true;
+
+        /* ---- ground splats: bloom then fade ---- */
+        for (const m of this.splatPool) {
+            if (!m.visible) continue;
+            m.userData.t++;
+            const k = m.userData.t / m.userData.life;
+            if (k >= 1) { m.visible = false; m.material.opacity = 0; continue; }
+            const s = m.userData.size * (0.35 + k * 1.25);
+            m.scale.set(s, s, 1);
+            m.material.opacity = 0.6 * (1 - k) * (1 - k);
+        }
+
+        /* ---- shock rings ---- */
+        for (const r of this.ringPool) {
+            if (!r.visible) continue;
+            r.userData.t++;
+            const k = r.userData.t / 26;
+            if (k >= 1) { r.visible = false; r.material.opacity = 0; continue; }
+            r.scale.setScalar(14 + k * 190);
+            r.material.opacity = 0.75 * (1 - k);
+        }
+
+        /* ---- wrecked cars ---- */
+        for (const w of this.wreckPool) {
+            if (!w.active) continue;
+            w.t++;
+            const car = w.car;
+            car.rotation.x += w.spinX;
+            car.rotation.z += w.spinZ;
+            car.rotation.y += w.spinY;
+            w.vy -= 0.85;
+            car.position.x += w.vx;
+            car.position.z += w.vz;
+            car.position.y += w.vy;
+            if (car.position.y < 0) {                      // hits the road, loses energy
+                car.position.y = 0;
+                w.vy = -w.vy * 0.3;
+                w.spinX *= 0.7; w.spinZ *= 0.7; w.spinY *= 0.7;
+                w.vx *= 0.7; w.vz *= 0.7;
+            }
+            if (w.t < 20 && w.t % 4 === 0) {               // liquid streaming off the wreck
+                const c = car.userData.handle.color;
+                this.spawnSplatter(car.position.x, car.position.z, c, 0.35);
+            }
+            const k = w.t / 46;
+            car.scale.setScalar(Math.max(0.06, 1 - k * 0.9));
+            if (k >= 1) {
+                w.active = false;
+                car.visible = false;
+                car.scale.setScalar(1);
+            }
+        }
     }
 
     /* ---------------------------------------------------------------- */
@@ -289,6 +514,18 @@ export class World {
             const f = 0.75 + Math.random() * 0.5;
             h.flames.forEach(fl => fl.scale.set(0.8, f, 0.8));
         }
+        /* ghost mode: the game decides the blink, we just hide the car */
+        car.visible = !opts.hidden;
+        /* impact animation: the player's car is thrown into a spin */
+        if (this.hitT > 0) {
+            const n = 34 - this.hitT;
+            const w = (this.hitT / 34) * (this.hitT / 34);
+            car.rotation.y += Math.sin(n * 0.55) * 0.9 * w;
+            car.rotation.z += Math.sin(n * 0.8) * 0.32 * w;
+            car.rotation.x += Math.sin(n * 0.45) * 0.16 * w;
+            car.position.y = Math.abs(Math.sin(n * 0.5)) * 6 * w;
+            this.hitT--;
+        }
         /* ---- chase camera: fixed rig that follows the car sideways ----
            Deliberately NOT tied to nitro. The livery swaps to cyan under
            boost and the camera used to widen and pull back at the same
@@ -340,11 +577,20 @@ export class World {
             let m = this.bulletPool[i];
             if (!m) {
                 m = new THREE.Mesh(this.bulletGeo, this.bulletMat);
+                /* additive halo so the tracer reads against the dark road */
+                const halo = new THREE.Mesh(new THREE.PlaneGeometry(46, 46),
+                    new THREE.MeshBasicMaterial({
+                        map: glowTexture(), color: '#ffea00', transparent: true, opacity: 0.8,
+                        blending: THREE.AdditiveBlending, depthWrite: false
+                    }));
+                m.add(halo);
+                m.userData.halo = halo;
                 this.bulletPool[i] = m;
                 this.scene.add(m);
             }
             m.visible = true;
-            m.position.set(list[i].wx, 9, list[i].wz);
+            m.position.set(list[i].wx, 12, list[i].wz);
+            m.userData.halo.quaternion.copy(this.camera.quaternion);   // billboard
         }
         for (let i = list.length; i < this.bulletPool.length; i++) this.bulletPool[i].visible = false;
     }
@@ -470,6 +716,7 @@ export class World {
     }
 
     render() {
+        this._updateEffects();
         this.renderer.render(this.scene, this.camera);
     }
 }

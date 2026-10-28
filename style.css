@@ -234,6 +234,41 @@ h1 {
     box-shadow: 0 0 25px rgba(255, 0, 85, 0.6); cursor: pointer; z-index: 16;
 }
 #shoot-btn-left { left: 20px; } #shoot-btn-right { right: 20px; }
+
+/* Skill buttons — sit just above the SHOOT buttons, clear of the car */
+.skill-btn {
+    position: absolute; bottom: 128px; width: 66px; height: 66px;
+    border-radius: 50%; display: none; z-index: 16;
+    flex-direction: column; justify-content: center; align-items: center;
+    background: radial-gradient(circle, #00f0ff 0%, #052b45 100%);
+    border: 2px solid #9ffcff; box-shadow: 0 0 18px rgba(0, 240, 255, 0.55);
+    cursor: pointer; -webkit-user-select: none; user-select: none;
+}
+#skill-btn-left { left: 28px; }
+#skill-btn-right {
+    right: 28px;
+    background: radial-gradient(circle, #ffea00 0%, #4d3300 100%);
+    border-color: #ffe97a; box-shadow: 0 0 18px rgba(255, 234, 0, 0.55);
+}
+.skill-btn .skill-title {
+    font-size: 0.62rem; font-weight: 900; letter-spacing: 1px; color: #fff;
+    text-shadow: 0 0 6px rgba(255,255,255,0.9), 0 1px 3px rgba(0,0,0,0.8);
+}
+.skill-btn .skill-sub {
+    font-size: 0.5rem; font-weight: bold; color: #fff; opacity: 0.92; margin-top: 2px;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+}
+.skill-btn:active { transform: scale(0.9); }
+.skill-btn.empty {
+    background: rgba(30, 30, 40, 0.55); border-color: #555; box-shadow: none;
+}
+.skill-btn.empty .skill-title { color: #6d6d7a; text-shadow: none; }
+.skill-btn.empty .skill-sub { color: #6d6d7a; }
+.skill-btn.ghosting { animation: ghostPulse 0.5s ease-in-out infinite alternate; }
+@keyframes ghostPulse {
+    from { box-shadow: 0 0 10px rgba(0,240,255,0.4); opacity: 0.65; }
+    to   { box-shadow: 0 0 26px rgba(0,240,255,0.95); opacity: 1; }
+}
 .shoot-btn:active { transform: scale(0.9); }
 .shoot-btn .btn-title { font-size: 0.8rem; font-weight: 900; letter-spacing: 1px; text-shadow: 0 0 5px #fff; }
 .shoot-btn .ammo-count { font-size: 0.65rem; font-weight: bold; color: #ffea00; margin-top: 2px; }
