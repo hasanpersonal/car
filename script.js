@@ -46,7 +46,7 @@ const joyContainer = document.getElementById('joystick-container');
 const joyKnob = document.getElementById('joystick-knob');
 
 let joyActive = false, joyTouchId = null, joyStartX = 0, joyStartY = 0;
-let joyDX = 0, joyDY = 0;
+let joyDX = 0, joyDY = 0, brakeActive = false;
 const maxRange = 55; 
 let lastTapTime = 0; 
 let audioCtx, engineOsc, engineGain;
@@ -340,20 +340,38 @@ class Player {
     update() {
         let targetVX = joyActive ? (joyDX / maxRange) * 10 : (keys.a ? -8 : keys.d ? 8 : 0);
         this.vx += (targetVX - this.vx) * 0.25;
-        this.x += this.vx; this.angle = this.vx * 0.04;
+        this.x += this.vx; this.angle = this.vx * 0.012;
         if(this.x < 22) { this.x = 22; this.vx = 0; }
         if(this.x > gameWidth - 22 - this.w) { this.x = gameWidth - 22 - this.w; this.vx = 0; }
-        if(speed > 40 && Math.random() < 0.6) particles.push(new Particle(this.x + this.w/2, this.y + this.h, isNitro ? '#00f0ff' : '#ff0055', -speed*0.03, Math.random()*4+1));
+
+        /* --- exhaust trail (visual only) --- */
+        if(speed > 40 && Math.random() < 0.6) {
+            const tipX = this.x + this.w * (Math.random() < 0.5 ? 0.36 : 0.64);
+            particles.push(new Particle(tipX, this.y + this.h * 0.84, isNitro ? '#00f0ff' : '#ff0055', -speed*0.03, Math.random()*4+1));
+        }
+        /* --- tyre smoke when the car is thrown sideways or braked hard --- */
+        if(speed > 90 && (Math.abs(this.vx) > 6 || brakeActive) && Math.random() < 0.35) {
+            const side = this.vx > 0 ? 0.07 : 0.93;
+            particles.push(new Particle(this.x + this.w * side, this.y + this.h * 0.80,
+                'rgba(190,196,215,0.55)', -speed*0.02, Math.random()*3+2));
+        }
         
         this.y += ((gameHeight - 160) - this.y) * 0.05;
     }
     draw() {
-        ctx.save(); ctx.translate(this.x + this.w/2, this.y + this.h/2); ctx.rotate(this.angle);
-        ctx.shadowBlur = 20; ctx.shadowColor = isNitro ? '#00f0ff' : '#ff0055';
-        ctx.fillStyle = '#0a0a18'; ctx.strokeStyle = isNitro ? '#00f0ff' : '#ff0055'; ctx.lineWidth = 3;
-        ctx.beginPath(); ctx.rect(-this.w/2, -this.h/2, this.w, this.h); ctx.fill(); ctx.stroke();
-        ctx.shadowBlur = 0; ctx.fillStyle = '#1a1a3a'; ctx.strokeStyle = '#8da1d6';
-        ctx.beginPath(); ctx.rect(-this.w/3, -this.h/6, (this.w/3)*2, this.h/2.5); ctx.fill(); ctx.stroke(); ctx.restore();
+        ctx.save();
+        ctx.translate(this.x + this.w/2, this.y + this.h/2);
+        ctx.rotate(this.angle);
+        CarArt.drawCar(ctx, {
+            w: this.w, h: this.h,
+            style: 'sports',
+            color: isNitro ? '#00f0ff' : '#ff0055',
+            steer: Math.max(-1, Math.min(1, this.vx / 9)),
+            brake: brakeActive ? 1 : 0,
+            boost: isNitro ? 1 : 0,
+            phase: roadOffset
+        });
+        ctx.restore();
     }
 }
 
@@ -364,12 +382,29 @@ class Enemy {
         this.x = lanes[Math.floor(Math.random() * lanes.length)] + (Math.random()*8 - 4);
         this.y = -250; this.vShift = Math.random() * 3 + 2; 
         this.color = ['#a200ff', '#00ff66', '#ff8800', '#ff00aa'][Math.floor(Math.random() * 4)];
+        /* body shape + a personal animation offset so no two cars move alike */
+        const shapes = ['sedan', 'coupe', 'van', 'sedan', 'coupe'];
+        this.style = shapes[Math.floor(Math.random() * shapes.length)];
+        this.phaseOff = Math.random() * 400;
     }
     update() { this.y += this.vShift + (speed * 0.08); }
     draw() {
-        ctx.save(); ctx.shadowBlur = 15; ctx.shadowColor = this.color;
-        ctx.fillStyle = '#050510'; ctx.strokeStyle = this.color; ctx.lineWidth = 2.5;
-        ctx.beginPath(); ctx.rect(this.x, this.y, this.w, this.h); ctx.fill(); ctx.stroke(); ctx.restore();
+        /* brake lights come on when the player rushes up behind them (visual only) */
+        let braking = 0;
+        if (player && speed > 120 && this.y < player.y && (player.y - this.y) < 300) braking = 1;
+        ctx.save();
+        ctx.translate(this.x + this.w/2, this.y + this.h/2);
+        CarArt.drawCar(ctx, {
+            w: this.w, h: this.h,
+            style: this.style,
+            color: this.color,
+            /* gentle lane-keeping wobble */
+            steer: Math.sin((roadOffset + this.phaseOff) * 0.012) * 0.16,
+            brake: braking,
+            boost: 0,
+            phase: roadOffset + this.phaseOff
+        });
+        ctx.restore();
     }
 }
 
@@ -381,13 +416,31 @@ class Star {
     update() { this.y += speed * 0.08; this.rot += 0.05; }
     draw() {
         ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.rot);
-        ctx.shadowBlur = 20; ctx.shadowColor = '#ffea00'; ctx.fillStyle = '#ffea00';
+        /* rotating hex frame around the pickup */
+        ctx.strokeStyle = 'rgba(255,234,0,0.35)'; ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i <= 6; i++) {
+            const a = (i * 60 - 90) * Math.PI / 180;
+            const rr = this.r * 1.6;
+            i === 0 ? ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.stroke();
+        ctx.shadowBlur = 20; ctx.shadowColor = '#ffea00';
+        ctx.fillStyle = '#ffea00';
         ctx.beginPath();
         for (let i = 0; i < 5; i++) {
             ctx.lineTo(Math.cos((18 + i * 72) * Math.PI / 180) * this.r, -Math.sin((18 + i * 72) * Math.PI / 180) * this.r);
             ctx.lineTo(Math.cos((54 + i * 72) * Math.PI / 180) * (this.r/2), -Math.sin((54 + i * 72) * Math.PI / 180) * (this.r/2));
         }
-        ctx.closePath(); ctx.fill(); ctx.restore();
+        ctx.closePath(); ctx.fill();
+        /* inner facet so the star reads as a solid, not a flat blob */
+        ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,0.75)';
+        ctx.beginPath();
+        for (let i = 0; i < 5; i++) {
+            ctx.lineTo(Math.cos((18 + i * 72) * Math.PI / 180) * (this.r * 0.42), -Math.sin((18 + i * 72) * Math.PI / 180) * (this.r * 0.42));
+        }
+        ctx.closePath(); ctx.fill();
+        ctx.restore();
     }
 }
 
@@ -475,7 +528,14 @@ function triggerCrash() {
     screenShake = 30;
     screenFlash = 0.5;
     playSfx(120, 'sawtooth', 0.5, 0.4);
-    
+
+    /* sparks + shards flying off the impact (visual only) */
+    const debris = ['#ff8800', '#ffea00', '#ffffff', '#ff0055'];
+    for (let k = 0; k < 24; k++) {
+        particles.push(new Particle(player.x + player.w / 2, player.y + player.h * 0.35,
+            debris[k % 4], -(Math.random() * 6 + 2), Math.random() * 6 + 2));
+    }
+
     score = Math.max(0, score - 800); 
     speed = 0;
     player.y = Math.min(gameHeight - 80, player.y + 120); 
@@ -509,18 +569,145 @@ function drawOpponents() {
         if(drawY > -300 && drawY < gameHeight + 100) {
             ctx.save();
             ctx.translate(opp.x + 22, drawY + 42.5); 
-            ctx.globalAlpha = 0.5;
-            ctx.shadowBlur = 20; ctx.shadowColor = opp.color || '#a200ff';
-            ctx.fillStyle = '#0a0a18'; ctx.strokeStyle = opp.color || '#a200ff'; ctx.lineWidth = 3;
-            ctx.beginPath(); ctx.rect(-22, -42.5, 44, 85); ctx.fill(); ctx.stroke();
-            
-            ctx.globalAlpha = 0.8;
-            ctx.shadowBlur = 0; ctx.fillStyle = '#fff'; ctx.font = 'bold 12px sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(opp.name, 0, -50);
+            CarArt.drawCar(ctx, {
+                w: 44, h: 85,
+                /* a fixed body shape per driver so rivals stay recognisable */
+                style: ['sports', 'sedan', 'coupe'][(id.charCodeAt(0) + id.length) % 3],
+                color: opp.color || '#a200ff',
+                alpha: 0.85,
+                steer: Math.sin((roadOffset + (opp.score % 50)) * 0.01) * 0.2,
+                brake: 0,
+                boost: 0,
+                phase: roadOffset + (opp.score % 100),
+                name: opp.name
+            });
             ctx.restore();
         }
     }
+}
+
+/* ------------------------------------------------------------------ *
+ *  ROAD — pure decoration. Asphalt grain, kerbs, lane markings,
+ *  roadside posts, horizon haze and nitro speed streaks.
+ * ------------------------------------------------------------------ */
+let roadTex = null;
+function buildRoadTexture() {
+    const c = document.createElement('canvas');
+    c.width = gameWidth - 40; c.height = 256;
+    const g = c.getContext('2d');
+    g.fillStyle = '#08080f'; g.fillRect(0, 0, c.width, c.height);
+    for (let i = 0; i < 2400; i++) {                       /* asphalt grain */
+        g.fillStyle = `rgba(255,255,255,${Math.random() * 0.05 + 0.01})`;
+        g.fillRect(Math.random() * c.width, Math.random() * c.height, Math.random() * 2 + 1, Math.random() * 2 + 1);
+    }
+    for (let i = 0; i < 26; i++) {                         /* polished tyre lines */
+        g.fillStyle = `rgba(0,0,0,${Math.random() * 0.25 + 0.08})`;
+        g.fillRect(Math.random() * c.width, Math.random() * c.height, Math.random() * 3 + 1, Math.random() * 70 + 30);
+    }
+    roadTex = ctx.createPattern(c, 'repeat');
+}
+try { buildRoadTexture(); } catch (e) { roadTex = null; }
+
+/* one lane dash, slightly wider at the near end (perspective) */
+function laneDash(cx, y, w, h) {
+    ctx.beginPath();
+    ctx.moveTo(cx - w * 0.35, y);
+    ctx.lineTo(cx + w * 0.35, y);
+    ctx.lineTo(cx + w * 0.65, y + h);
+    ctx.lineTo(cx - w * 0.65, y + h);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function drawRoad() {
+    const L = 20, R = gameWidth - 20;
+
+    ctx.fillStyle = '#020206'; ctx.fillRect(0, 0, gameWidth, gameHeight);   /* void */
+    ctx.fillStyle = '#08080f'; ctx.fillRect(L, 0, R - L, gameHeight);       /* asphalt */
+
+    if (roadTex) {
+        ctx.save();
+        ctx.beginPath(); ctx.rect(L, 0, R - L, gameHeight); ctx.clip();
+        ctx.translate(0, roadOffset % 256);
+        ctx.fillStyle = roadTex;
+        ctx.fillRect(L, -256, R - L, gameHeight + 256);
+        ctx.restore();
+    }
+
+    /* faint transverse seams = sense of speed */
+    ctx.save();
+    ctx.beginPath(); ctx.rect(L, 0, R - L, gameHeight); ctx.clip();
+    ctx.fillStyle = 'rgba(255,255,255,0.025)';
+    const seamY = (roadOffset * 1.6) % 130;
+    for (let y = -130; y < gameHeight; y += 130) ctx.fillRect(L, y + seamY, R - L, 3);
+    ctx.restore();
+
+    /* rumble kerbs on both shoulders */
+    const kerbH = 26, kerbW = 12, kOff = roadOffset % (kerbH * 2);
+    for (let i = -2; i < gameHeight / kerbH + 2; i++) {
+        const y = i * kerbH + kOff, on = (i % 2 === 0);
+        ctx.fillStyle = on ? 'rgba(0,240,255,0.45)' : 'rgba(8,8,18,0.9)';
+        ctx.fillRect(L, y, kerbW, kerbH);
+        ctx.fillStyle = on ? 'rgba(255,0,85,0.45)' : 'rgba(8,8,18,0.9)';
+        ctx.fillRect(R - kerbW, y, kerbW, kerbH);
+    }
+
+    /* lane markings */
+    ctx.fillStyle = 'rgba(255,255,255,0.20)';
+    let lineY = roadOffset % 80;
+    for (let y = -80; y < gameHeight; y += 80) {
+        laneDash(gameWidth * 0.25, y + lineY, 2, 40);
+        laneDash(gameWidth * 0.50, y + lineY, 4, 40);
+        laneDash(gameWidth * 0.75, y + lineY, 2, 40);
+    }
+
+    /* nitro speed streaks */
+    if (isNitro) {
+        ctx.fillStyle = 'rgba(190,245,255,0.30)';
+        const sOff = (roadOffset * 2.5) % 220;
+        for (let i = 0; i < 14; i++) {
+            const x = 30 + ((i * 97) % (gameWidth - 60));
+            const y = (i * 137 + sOff) % (gameHeight + 220) - 110;
+            ctx.fillRect(x, y, 2, 40 + (i % 3) * 30);
+        }
+    }
+
+    /* neon barriers */
+    ctx.save();
+    ctx.shadowBlur = 15; ctx.shadowColor = '#00f0ff'; ctx.fillStyle = '#00f0ff';
+    ctx.fillRect(18, 0, 4, gameHeight);
+    ctx.shadowColor = '#ff0055'; ctx.fillStyle = '#ff0055';
+    ctx.fillRect(gameWidth - 22, 0, 4, gameHeight);
+    ctx.restore();
+
+    /* roadside marker posts */
+    const postGap = 110, pOff = roadOffset % postGap;
+    for (let y = -postGap; y < gameHeight + postGap; y += postGap) {
+        ctx.fillStyle = 'rgba(0,240,255,0.5)';  ctx.fillRect(6, y + pOff, 8, 26);
+        ctx.fillStyle = 'rgba(255,0,85,0.5)';   ctx.fillRect(gameWidth - 14, y + pOff, 8, 26);
+    }
+
+    /* haze at the far end of the track */
+    const haze = ctx.createLinearGradient(0, 0, 0, 150);
+    haze.addColorStop(0, 'rgba(0,240,255,0.16)');
+    haze.addColorStop(1, 'rgba(0,240,255,0)');
+    ctx.fillStyle = haze; ctx.fillRect(0, 0, gameWidth, 150);
+}
+
+/* tracer round: tapered shell + bright core (same hit-box as before) */
+function drawBullet(b) {
+    const x = b.x, y = b.y, w = b.w, h = b.h;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.lineTo(x + w / 2, y + h * 0.20);
+    ctx.lineTo(x + w * 0.34, y + h);
+    ctx.lineTo(x - w * 0.34, y + h);
+    ctx.lineTo(x - w / 2, y + h * 0.20);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.9)';
+    ctx.fillRect(x - w * 0.12, y + h * 0.18, w * 0.24, h * 0.62);
+    ctx.fillStyle = '#ffea00';
 }
 
 function render() {
@@ -536,6 +723,7 @@ function render() {
         let nitroReq = (joyActive && joyDY < -14) || keys.w;
         let brakeReq = (joyActive && joyDY > 14) || keys.s; 
         isNitro = nitroReq && nitro > 0;
+        brakeActive = brakeReq;
         
         // --- UPGRADED LINE (LINE 424): Nitro Speed set to 370 & Burn Rate set to 0.24 ---
         if(isNitro) { targetSpeed = 370; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
@@ -562,25 +750,15 @@ function render() {
     } else {
         speed += (0 - speed) * 0.1;
         roadOffset += (speed * 0.08);
+        brakeActive = false;
     }
 
-    ctx.fillStyle = '#020206'; ctx.fillRect(0, 0, gameWidth, gameHeight);
-    ctx.fillStyle = '#060612'; ctx.fillRect(20, 0, gameWidth - 40, gameHeight); 
-    ctx.shadowBlur = 15; ctx.shadowColor = '#00f0ff'; ctx.fillStyle = '#00f0ff'; ctx.fillRect(18, 0, 4, gameHeight);
-    ctx.shadowColor = '#ff0055'; ctx.fillStyle = '#ff0055'; ctx.fillRect(gameWidth - 22, 0, 4, gameHeight);
-    ctx.shadowBlur = 0;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.15)';
-    let lineY = roadOffset % 80;
-    for(let y = -80; y < gameHeight; y += 80) {
-        ctx.fillRect(gameWidth * 0.25, y + lineY, 2, 40);
-        ctx.fillRect(gameWidth * 0.5 - 2, y + lineY, 4, 40);
-        ctx.fillRect(gameWidth * 0.75, y + lineY, 2, 40);
-    }
+    drawRoad();
 
     ctx.save();
     ctx.fillStyle = '#ffea00'; ctx.shadowBlur = 15; ctx.shadowColor = '#ffea00';
     for(let i = activeBullets.length - 1; i >= 0; i--) {
-        let b = activeBullets[i]; b.y -= 18; ctx.fillRect(b.x - b.w/2, b.y, b.w, b.h);
+        let b = activeBullets[i]; b.y -= 18; drawBullet(b);
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
