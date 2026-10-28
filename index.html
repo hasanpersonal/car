@@ -94,12 +94,19 @@
             <div class="page-footer">was designed by imrul hasan, credit: Gemini</div>
         </div>
 
+        <div id="flash"></div>
         <canvas id="canvas"></canvas>
     </div>
 
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-database-compat.js"></script>
-    <script src="car-art.js"></script>
-    <script src="script.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "./vendor/three.min.js"
+        }
+    }
+    </script>
+    <script type="module" src="script.js"></script>
 </body>
 </html>
