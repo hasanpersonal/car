@@ -226,8 +226,12 @@ h1 {
 .nitro-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #ff0055, #ffea00, #00ff66); box-shadow: 0 0 15px #ff0055; transition: width 0.1s linear; }
 .nitro-percent { font-family: monospace; font-size: 0.85rem; font-weight: 900; color: #00f0ff; min-width: 40px; text-align: right; text-shadow: 0 0 5px #00f0ff, 0 1px 3px rgba(0,0,0,0.95); }
 
+/* The car is placed by the camera as a PERCENTAGE of the screen (its tail
+   always sits at ~70% of the height), so the controls are sized and placed in
+   vh too. Fixed pixels put the buttons on top of the car on short screens
+   and in landscape. */
 .shoot-btn {
-    position: absolute; bottom: 30px; width: 82px; height: 82px;
+    position: absolute; bottom: 3.5vh; width: clamp(40px, 9.6vh, 82px); height: clamp(40px, 9.6vh, 82px);
     background: radial-gradient(circle, #ff0055 0%, #7a0023 100%);
     border: 3px solid #ffea00; border-radius: 50%; display: none;
     flex-direction: column; justify-content: center; align-items: center;
@@ -237,25 +241,27 @@ h1 {
 
 /* Skill buttons — sit just above the SHOOT buttons, clear of the car */
 .skill-btn {
-    position: absolute; bottom: 128px; width: 66px; height: 66px;
+    position: absolute;
+    bottom: calc(3.5vh + clamp(40px, 9.6vh, 82px) + 1.6vh);
+    width: clamp(34px, 7.8vh, 66px); height: clamp(34px, 7.8vh, 66px);
     border-radius: 50%; display: none; z-index: 16;
     flex-direction: column; justify-content: center; align-items: center;
     background: radial-gradient(circle, #00f0ff 0%, #052b45 100%);
     border: 2px solid #9ffcff; box-shadow: 0 0 18px rgba(0, 240, 255, 0.55);
     cursor: pointer; -webkit-user-select: none; user-select: none;
 }
-#skill-btn-left { left: 28px; }
+#skill-btn-left { left: calc(20px + (clamp(40px, 9.6vh, 82px) - clamp(34px, 7.8vh, 66px)) / 2); }
 #skill-btn-right {
-    right: 28px;
+    right: calc(20px + (clamp(40px, 9.6vh, 82px) - clamp(34px, 7.8vh, 66px)) / 2);
     background: radial-gradient(circle, #ffea00 0%, #4d3300 100%);
     border-color: #ffe97a; box-shadow: 0 0 18px rgba(255, 234, 0, 0.55);
 }
 .skill-btn .skill-title {
-    font-size: 0.62rem; font-weight: 900; letter-spacing: 1px; color: #fff;
+    font-size: clamp(0.45rem, 1.1vh, 0.62rem); font-weight: 900; letter-spacing: 1px; color: #fff;
     text-shadow: 0 0 6px rgba(255,255,255,0.9), 0 1px 3px rgba(0,0,0,0.8);
 }
 .skill-btn .skill-sub {
-    font-size: 0.5rem; font-weight: bold; color: #fff; opacity: 0.92; margin-top: 2px;
+    font-size: clamp(0.36rem, 0.9vh, 0.5rem); font-weight: bold; color: #fff; opacity: 0.92; margin-top: 2px;
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
 }
 .skill-btn:active { transform: scale(0.9); }
@@ -270,8 +276,8 @@ h1 {
     to   { box-shadow: 0 0 26px rgba(0,240,255,0.95); opacity: 1; }
 }
 .shoot-btn:active { transform: scale(0.9); }
-.shoot-btn .btn-title { font-size: 0.8rem; font-weight: 900; letter-spacing: 1px; text-shadow: 0 0 5px #fff; }
-.shoot-btn .ammo-count { font-size: 0.65rem; font-weight: bold; color: #ffea00; margin-top: 2px; }
+.shoot-btn .btn-title { font-size: clamp(0.55rem, 1.35vh, 0.8rem); font-weight: 900; letter-spacing: 1px; text-shadow: 0 0 5px #fff; }
+.shoot-btn .ammo-count { font-size: clamp(0.45rem, 1.1vh, 0.65rem); font-weight: bold; color: #ffea00; margin-top: 2px; }
 
 .shoot-btn.empty { background: rgba(40, 40, 40, 0.6); border-color: #555; box-shadow: none; }
 .shoot-btn.empty .btn-title { color: #666; text-shadow: none; }

@@ -33,6 +33,9 @@ let screenShake = 0, roadOffset = 0, screenFlash = 0;
 let crashStun = 0;
 const CRASH_STUN = 36;                    // ~0.6s at 60fps
 
+/* Traffic cruises forward at the same 80 the brake drops you to. */
+const NPC_SPEED = 80;
+
 /* --- skills: both cost 5 ammo --- */
 const SKILL_COST = 5;
 const GHOST_FRAMES = 180;                 // 3 seconds at 60fps
@@ -43,6 +46,7 @@ let enemies = [], stars = [], activeBullets = [], particles = [];
 
 let raceTimeLeft = 60; 
 let timerInterval = null;
+let lastEnemyCount = -1;
 
 /* The playfield is still described in the original 480 x 850 screen units so
    every rule (lanes, hit-boxes, speeds, spawning) is untouched. Those units
@@ -80,7 +84,6 @@ const joyKnob = document.getElementById('joystick-knob');
 let joyActive = false, joyTouchId = null, joyStartX = 0, joyStartY = 0;
 let joyDX = 0, joyDY = 0, brakeActive = false;
 const maxRange = 55; 
-let lastTapTime = 0; 
 let audioCtx, engineOsc, engineGain;
 
 // --- MULTIPLAYER ROOM SYSTEMS ---
@@ -141,11 +144,7 @@ function listenToRoom() {
             // রুমে ব্যাক করার পর গেম ওভার স্ক্রিন হাইড করে ওয়েটিং স্ক্রিন চালু করা
             document.getElementById('gameover-screen').classList.add('hidden');
             document.getElementById('waiting-screen').classList.remove('hidden');
-            hud.style.display = 'none';
-            btnLeft.style.display = 'none';
-            btnRight.style.display = 'none';
-            if(btnSkillLeft) btnSkillLeft.style.display = 'none';
-            if(btnSkillRight) btnSkillRight.style.display = 'none';
+            hideControls();
 
             const list = document.getElementById('players-list');
             list.innerHTML = "";
@@ -251,11 +250,7 @@ function initGameAndFullscreen() {
     setupAudio();
     document.getElementById('start-screen').classList.add('hidden');
     document.getElementById('waiting-screen').classList.add('hidden');
-    hud.style.display = 'block';
-    btnLeft.style.display = 'flex';
-    btnRight.style.display = 'flex';
-    if(btnSkillLeft) btnSkillLeft.style.display = 'flex';
-    if(btnSkillRight) btnSkillRight.style.display = 'flex';
+    showControls();
     restartGame();
 }
 
@@ -286,19 +281,6 @@ gameContainer.addEventListener('touchstart', (e) => {
     if (!gameActive) return;
     if (e.target.closest('.shoot-btn') || e.target.closest('.skill-btn') || e.target.closest('.overlay')) return;
 
-    let currentTime = new Date().getTime();
-    let tapLength = currentTime - lastTapTime;
-    
-    if (tapLength < 300 && tapLength > 0 && bullets >= 10) {
-        bullets -= 10; updateAmmoUI();
-        enemies.forEach(en => {
-            if (world) world.wreck(en.style, en.color, en.wx, en.wz, 1.15);
-            for(let k=0; k<25; k++) particles.push(new Particle(en.x + en.w/2, en.y + en.h/2, '#ff0055', (Math.random()-0.5)*12, Math.random()*5+2));
-            score += 100;
-        });
-        enemies = []; playSfx(150, 'square', 0.6, 0.6); screenShake = 30; screenFlash = 1.0; lastTapTime = 0; e.preventDefault(); return; 
-    }
-    lastTapTime = currentTime;
 
     const rect = gameContainer.getBoundingClientRect();
     for (let i = 0; i < e.touches.length; i++) {
@@ -380,13 +362,18 @@ function updateAmmoUI() {
    visible / invisible the whole time.  NUKE (right): 5 ammo wipes the road. */
 function updateSkillUI() {
     const afford = bullets >= SKILL_COST && gameActive;
+    const nukeReady = afford && enemies.length > 0;
     if (btnSkillLeft) {
         btnSkillLeft.classList.toggle('empty', !(afford && !ghostActive));
         btnSkillLeft.classList.toggle('ghosting', ghostActive);
         const sub = btnSkillLeft.querySelector('.skill-sub');
         if (sub) sub.innerText = ghostActive ? `${Math.ceil(ghostTimer / 60)}s` : `${SKILL_COST} AMMO`;
     }
-    if (btnSkillRight) btnSkillRight.classList.toggle('empty', !afford);
+    if (btnSkillRight) {
+        btnSkillRight.classList.toggle('empty', !nukeReady);
+        const subR = btnSkillRight.querySelector('.skill-sub');
+        if (subR) subR.innerText = nukeReady ? `${SKILL_COST} AMMO` : (afford ? 'NO CARS' : `${SKILL_COST} AMMO`);
+    }
 }
 
 function useGhost() {
@@ -468,14 +455,17 @@ class Enemy {
         this.w = 44; this.h = 85;
         const lanes = [40, 140, 240, 340, 410];
         this.x = lanes[Math.floor(Math.random() * lanes.length)] + (Math.random()*8 - 4);
-        this.y = -250; this.vShift = Math.random() * 3 + 2; 
+        this.y = -250;
         this.color = ['#a200ff', '#00ff66', '#ff8800', '#ff00aa'][Math.floor(Math.random() * 4)];
         /* body shape + a personal animation offset so no two cars move alike */
-        const shapes = ['sedan', 'coupe', 'van', 'sedan', 'coupe'];
+        const shapes = ['f1', 'f2', 'f3', 'f4', 'f2'];
         this.style = shapes[Math.floor(Math.random() * shapes.length)];
         this.phaseOff = Math.random() * 400;
     }
-    update() { this.y += this.vShift + (speed * 0.08); }
+    /* Traffic is moving too — it drives forward at the brake speed (80), so
+       you reel it in instead of it charging at you. Brake to 80 and you match
+       it exactly; stop dead after a crash and it drives away from you. */
+    update() { this.y += (speed - NPC_SPEED) * 0.08; }
     /* world-space position + the bits the 3D renderer needs */
     get wx() { return wx(this.x + this.w / 2); }
     get wz() { return wz(this.y + this.h / 2); }
@@ -574,7 +564,23 @@ function endRaceDuration() {
         box.style.display = 'block';
     }
     document.getElementById('gameover-screen').classList.remove('hidden');
+    hideControls();
+}
+
+/* every on-screen control, so nothing is left live behind an overlay */
+function hideControls() {
     hud.style.display = 'none';
+    btnLeft.style.display = 'none';
+    btnRight.style.display = 'none';
+    if(btnSkillLeft) btnSkillLeft.style.display = 'none';
+    if(btnSkillRight) btnSkillRight.style.display = 'none';
+}
+function showControls() {
+    hud.style.display = 'block';
+    btnLeft.style.display = 'flex';
+    btnRight.style.display = 'flex';
+    if(btnSkillLeft) btnSkillLeft.style.display = 'flex';
+    if(btnSkillRight) btnSkillRight.style.display = 'flex';
 }
 
 // --- NEW FUNCTION: BACK TO LOBBY (WITHOUT DISCONNECTING) ---
@@ -655,7 +661,7 @@ function syncOpponents() {
         if(drawY > -300 && drawY < gameHeight + 100) {
             ghosts.push({
                 wx: wx(opp.x + 22), wz: wz(drawY + 42.5),
-                style: ['sports', 'sedan', 'coupe'][(id.charCodeAt(0) + id.length) % 3],
+                style: ['f1', 'f2', 'f3'][(id.charCodeAt(0) + id.length) % 3],
                 color: opp.color || '#a200ff',
                 name: opp.name,
                 steer: Math.sin((roadOffset + (opp.score % 50)) * 0.01) * 0.2
@@ -713,7 +719,7 @@ function render() {
 
     /* ---- bullets: travel forward, kill traffic on contact ---- */
     for(let i = activeBullets.length - 1; i >= 0; i--) {
-        let b = activeBullets[i]; b.y -= 18;
+        let b = activeBullets[i]; b.y -= 18; let killed = false;
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
@@ -721,10 +727,13 @@ function render() {
                 if(world) world.wreck(e.style, e.color, e.wx, e.wz, 1);
                 for(let k=0; k<25; k++) particles.push(new Particle(e.x + e.w/2, e.y + e.h/2, e.color, (Math.random()-0.5)*12, Math.random()*5+2));
                 playSfx(300, 'sawtooth', 0.2, 0.25);
-                enemies.splice(j, 1); activeBullets.splice(i, 1); score += 100; break;
+                enemies.splice(j, 1); activeBullets.splice(i, 1); score += 100; killed = true; break;
             }
         }
-        if(b && b.y < -50) activeBullets.splice(i, 1);
+        /* Only retire the bullet for going off screen if it did NOT just kill
+           something: the array has shifted by then, so splicing again ate the
+           next bullet in line. */
+        if(!killed && b.y < -50) activeBullets.splice(i, 1);
     }
     if(world) world.syncBullets(activeBullets);
 
@@ -755,12 +764,14 @@ function render() {
         }
         if(enemies[i].y > gameHeight + 100) { enemies.splice(i, 1); if(gameActive) score += 30; }
     }
+    if(enemies.length !== lastEnemyCount) { lastEnemyCount = enemies.length; updateSkillUI(); }
     if(world) world.syncEnemies(enemies, speed, player ? wz(player.y + player.h / 2) : 0);
 
     syncOpponents();
 
     /* ---- ghost skill countdown + blink ---- */
     let playerHidden = false;
+    if(ghostActive && !gameActive) { ghostActive = false; ghostTimer = 0; updateSkillUI(); }
     if(ghostActive) {
         ghostTimer--;
         const period = ghostTimer < 60 ? 4 : 6;             // blinks faster as it runs out

@@ -167,7 +167,7 @@ export class World {
     _buildPools() {
         /* the player owns two identical cars, one in each livery, so nitro
            can swap the paint without ever building geometry at runtime */
-        this._playerCars = [buildCar('sports', '#ff0055'), buildCar('sports', '#00f0ff')];
+        this._playerCars = [buildCar('f1', '#ff0055'), buildCar('f1', '#00f0ff')];
         this._livery = 0;
         this._playerCars[1].visible = false;
         this.scene.add(this._playerCars[0], this._playerCars[1]);
@@ -197,6 +197,75 @@ export class World {
         this.scene.add(this.points);
 
         this._buildEffects();
+        this._buildAirStreaks();
+    }
+
+    /* ---------------------------------------------------------------- *
+     *  nitro: air tearing past the car
+     *  Long streaks that spawn far ahead and rip backwards past the
+     *  cockpit, so boosting reads as speed instead of just colour.
+     * ---------------------------------------------------------------- */
+    _buildAirStreaks() {
+        const N = 120;
+        this.airN = N;
+        this.airPos = new Float32Array(N * 6);
+        this.airData = [];
+        for (let i = 0; i < N; i++) {
+            const a = { x: 0, y: 0, z: 0, len: 60, spd: 30 };
+            this.airData.push(a);
+            this._respawnAir(a, true);
+        }
+        const g = new THREE.BufferGeometry();
+        g.setAttribute('position', new THREE.BufferAttribute(this.airPos, 3));
+        this.airGeo = g;
+        this.air = new THREE.LineSegments(g, new THREE.LineBasicMaterial({
+            color: '#cbf7ff', transparent: true, opacity: 0,
+            blending: THREE.AdditiveBlending, depthWrite: false
+        }));
+        this.air.frustumCulled = false;
+        this.air.visible = false;
+        this.scene.add(this.air);
+        this.airLevel = 0;
+        this._airOn = false;
+        this._boost = 0;
+        this._playerZ = 0;
+    }
+
+    _respawnAir(a, spread) {
+        const side = Math.random() < 0.5 ? -1 : 1;
+        a.x = side * (26 + Math.random() * 108);
+        a.y = 1 + Math.random() * 40;
+        a.z = spread
+            ? this._playerZ - 1300 + Math.random() * 1700
+            : this._playerZ - 950 - Math.random() * 650;
+        a.len = 45 + Math.random() * 110;
+        a.spd = 22 + Math.random() * 30;
+    }
+
+    _updateAir() {
+        const target = this._boost > 0.02 ? 1 : 0;
+        this.airLevel += (target - this.airLevel) * 0.16;
+        if (this.airLevel <= 0.02) {
+            if (this._airOn) { this.air.visible = false; this._airOn = false; }
+            return;
+        }
+        if (!this._airOn) {                       // scatter them so nothing pops in
+            this._airOn = true;
+            for (const a of this.airData) this._respawnAir(a, true);
+            this.air.visible = true;
+        }
+        const L = this.airLevel, pz = this._playerZ, arr = this.airPos;
+        for (let i = 0; i < this.airN; i++) {
+            const a = this.airData[i];
+            a.z += a.spd * (0.45 + L * 1.55);
+            if (a.z - pz > 430) { this._respawnAir(a, false); }
+            const len = a.len * (0.35 + L * 1.25);
+            const o = i * 6;
+            arr[o] = a.x;     arr[o + 1] = a.y; arr[o + 2] = a.z;
+            arr[o + 3] = a.x; arr[o + 4] = a.y; arr[o + 5] = a.z + len;
+        }
+        this.airGeo.attributes.position.needsUpdate = true;
+        this.air.material.opacity = 0.10 + 0.42 * L;
     }
 
     /* ---------------------------------------------------------------- *
@@ -223,9 +292,11 @@ export class World {
         this.drops.frustumCulled = false;
         this.scene.add(this.drops);
 
-        /* flat splats that bloom across the asphalt where the liquid lands */
+        /* flat splats that bloom across the asphalt where the liquid lands.
+           A nuke bursts five cars at once, so this has to be deep enough that
+           a live splat is never recycled out from under itself. */
         this.splatPool = [];
-        for (let i = 0; i < 12; i++) {
+        for (let i = 0; i < 30; i++) {
             const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
                 map: glowTexture(), transparent: true, opacity: 0,
                 blending: THREE.AdditiveBlending, depthWrite: false
@@ -240,7 +311,7 @@ export class World {
         /* expanding shock rings */
         this.ringPool = [];
         const ringGeo = new THREE.RingGeometry(0.72, 1, 40);
-        for (let i = 0; i < 5; i++) {
+        for (let i = 0; i < 16; i++) {
             const m = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({
                 color: '#ffffff', transparent: true, opacity: 0,
                 blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
@@ -255,6 +326,14 @@ export class World {
         /* wrecked cars that tumble, sink and melt into the road */
         this.wreckPool = [];
         this.hitT = 0;
+    }
+
+    /* the pool entry closest to the end of its life, so a saturated pool
+       restarts the least noticeable effect instead of number 0 */
+    _oldest(pool) {
+        let best = pool[0];
+        for (const p of pool) if ((p.userData.t || 0) > (best.userData.t || 0)) best = p;
+        return best;
     }
 
     /* liquid burst: droplets + splats + a shock ring */
@@ -283,7 +362,7 @@ export class World {
         }
         /* liquid hitting the tarmac */
         for (let i = 0; i < 3 + Math.round(power * 2); i++) {
-            const m = this.splatPool.find(s => !s.visible) || this.splatPool[0];
+            const m = this.splatPool.find(s => !s.visible) || this._oldest(this.splatPool);
             m.visible = true;
             m.userData.t = 0;
             m.userData.life = 40 + Math.random() * 30;
@@ -293,7 +372,7 @@ export class World {
             m.position.set(x + (Math.random() - 0.5) * 90, 0.9, z + (Math.random() - 0.5) * 70);
         }
         /* shock ring */
-        const r = this.ringPool.find(s => !s.visible) || this.ringPool[0];
+        const r = this.ringPool.find(s => !s.visible) || this._oldest(this.ringPool);
         r.visible = true;
         r.userData.t = 0;
         r.material.color.set(color);
@@ -511,6 +590,8 @@ export class World {
         car.rotation.set(0, -(opts.steer || 0) * 0.10, -(opts.steer || 0) * 0.045);
         h.setBrake(opts.brake || 0);
         h.setBoost(opts.boost || 0);
+        this._boost = opts.boost || 0;
+        this._playerZ = z;
         h.spinWheels(opts.phase * 0.05, -(opts.steer || 0));
         if (opts.boost > 0.02) {
             const f = 0.75 + Math.random() * 0.5;
@@ -654,24 +735,24 @@ export class World {
     }
 
     /* ---------------------------------------------------------------- */
+    /* Built per slot, NOT cached by name: two rivals called the same thing
+       used to share one sprite, and a slot kept a previous player's tag when
+       the opponent list reordered. */
     _labelSprite(name, color) {
-        if (!this._labels) this._labels = {};
-        if (this._labels[name]) return this._labels[name];
         const c = document.createElement('canvas');
         c.width = 256; c.height = 64;
         const g = c.getContext('2d');
         g.fillStyle = 'rgba(0,0,0,0.66)';
         g.strokeStyle = color; g.lineWidth = 3;
-        g.beginPath(); g.roundRect(4, 8, 248, 48, 12); g.fill(); g.stroke();
+        g.beginPath();
+        if (g.roundRect) g.roundRect(4, 8, 248, 48, 12); else g.rect(4, 8, 248, 48);
+        g.fill(); g.stroke();
         g.font = 'bold 30px Segoe UI, Roboto, sans-serif';
         g.fillStyle = '#ffffff'; g.textAlign = 'center'; g.textBaseline = 'middle';
         g.fillText(name.slice(0, 12), 128, 33);
         const tex = new THREE.CanvasTexture(c);
         tex.colorSpace = THREE.SRGBColorSpace;
-        const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
-        sp.scale.set(70, 17.5, 1);
-        this._labels[name] = sp;
-        return sp;
+        return new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthTest: false }));
     }
 
     syncGhosts(list, phase) {
@@ -680,10 +761,15 @@ export class World {
             const key = g.style + '|' + g.color;
             let slot = this.ghostPool[i];
             if (!slot || slot.key !== key) {
-                if (slot) { releaseCar(slot.car); this.scene.remove(slot.car); }
+                if (slot) { this._restoreMats(slot); releaseCar(slot.car); this.scene.remove(slot.car); }
                 const car = acquireCar(g.style, g.color);
                 this.scene.add(car);
-                slot = this.ghostPool[i] = { car, key };
+                /* Rival cars are projections of another player, so they are
+                   drawn semi-transparent. Their materials are shared with
+                   traffic, so they are cloned per slot and put back on the
+                   way out. The brake-light material stays original: the car's
+                   handle drives it. */
+                slot = this.ghostPool[i] = { car, key, swaps: this._makeGhostly(car) };
             }
             const car = slot.car;
             car.visible = true;
@@ -693,10 +779,14 @@ export class World {
             const h = car.userData.handle;
             h.setBrake(0); h.setBoost(0);
             h.spinWheels(phase * 0.05, g.steer || 0);
-            car.traverse(o => { if (o.material && o.material.transparent !== undefined) o.material.opacity = o.material.opacity; });
-            if (!slot.label) {
+
+            /* the name tag belongs to whoever is in this slot right now */
+            if (!slot.label || slot.name !== g.name) {
+                if (slot.label) { this.scene.remove(slot.label); slot.label.material.map.dispose(); slot.label.material.dispose(); }
                 slot.label = this._labelSprite(g.name, g.color);
+                slot.label.scale.set(70, 17.5, 1);
                 this.scene.add(slot.label);
+                slot.name = g.name;
             }
             slot.label.visible = true;
             slot.label.position.set(g.wx, 62, g.wz);
@@ -706,6 +796,25 @@ export class World {
             const slot = this.ghostPool[i];
             if (slot) { slot.car.visible = false; if (slot.label) slot.label.visible = false; }
         }
+    }
+
+    /* swap a car's shared materials for semi-transparent clones */
+    _makeGhostly(car) {
+        const swaps = [];
+        car.traverse(o => {
+            if (!o.material || o.userData.brakeLight) return;
+            const c = o.material.clone();
+            c.transparent = true;
+            c.opacity = (o.material.opacity === undefined ? 1 : o.material.opacity) * 0.5;
+            c.depthWrite = false;
+            swaps.push([o, o.material]);
+            o.material = c;
+        });
+        return swaps;
+    }
+    _restoreMats(slot) {
+        for (const [o, orig] of (slot.swaps || [])) { o.material.dispose(); o.material = orig; }
+        slot.swaps = null;
     }
 
     /* ---------------------------------------------------------------- */
@@ -720,6 +829,7 @@ export class World {
 
     render() {
         this._updateEffects();
+        this._updateAir();
         this.renderer.render(this.scene, this.camera);
     }
 }
