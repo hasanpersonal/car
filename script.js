@@ -1,3 +1,6 @@
+import * as THREE from 'three';
+import { World, wx, wz } from './scene3d.js';
+
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
     apiKey: "AIzaSyCKqsxIC2aGBR0UnejiXlIaJeKAfdW_Zp0",
@@ -32,12 +35,30 @@ let enemies = [], stars = [], activeBullets = [], particles = [];
 let raceTimeLeft = 60; 
 let timerInterval = null;
 
+/* The playfield is still described in the original 480 x 850 screen units so
+   every rule (lanes, hit-boxes, speeds, spawning) is untouched. Those units
+   are mapped into the 3D world by wx() / wz(). */
 const canvas = document.getElementById('canvas');
-const ctx = canvas.getContext('2d');
 const gameWidth = 480;
 const gameHeight = 850;
-canvas.width = gameWidth;
-canvas.height = gameHeight;
+
+let world = null;
+try {
+    world = new World(canvas);
+} catch (err) {
+    console.error('WebGL unavailable:', err);
+    const warn = document.createElement('div');
+    warn.style.cssText = 'position:absolute;inset:0;display:flex;align-items:center;' +
+        'justify-content:center;padding:30px;text-align:center;color:#ff0055;' +
+        'font-weight:bold;z-index:30;background:#04050c';
+    warn.innerText = 'This device could not start WebGL, so the 3D track cannot run.';
+    document.getElementById('game-container').appendChild(warn);
+}
+window.addEventListener('resize', () => world && world.resize());
+/* phones drop the GL context when the page is backgrounded — ask for it back */
+canvas.addEventListener('webglcontextlost', (e) => { e.preventDefault(); }, false);
+canvas.addEventListener('webglcontextrestored', () => { if (world) world.resize(); }, false);
+window.addEventListener('orientationchange', () => setTimeout(() => world && world.resize(), 250));
 
 const hud = document.getElementById('hud');
 const btnLeft = document.getElementById('shoot-btn-left');
@@ -359,19 +380,13 @@ class Player {
         this.y += ((gameHeight - 160) - this.y) * 0.05;
     }
     draw() {
-        ctx.save();
-        ctx.translate(this.x + this.w/2, this.y + this.h/2);
-        ctx.rotate(this.angle);
-        CarArt.drawCar(ctx, {
-            w: this.w, h: this.h,
-            style: 'sports',
-            color: isNitro ? '#00f0ff' : '#ff0055',
+        if(!world) return;
+        world.setPlayer(wx(this.x + this.w / 2), wz(this.y + this.h / 2), {
             steer: Math.max(-1, Math.min(1, this.vx / 9)),
             brake: brakeActive ? 1 : 0,
             boost: isNitro ? 1 : 0,
             phase: roadOffset
         });
-        ctx.restore();
     }
 }
 
@@ -388,24 +403,11 @@ class Enemy {
         this.phaseOff = Math.random() * 400;
     }
     update() { this.y += this.vShift + (speed * 0.08); }
-    draw() {
-        /* brake lights come on when the player rushes up behind them (visual only) */
-        let braking = 0;
-        if (player && speed > 120 && this.y < player.y && (player.y - this.y) < 300) braking = 1;
-        ctx.save();
-        ctx.translate(this.x + this.w/2, this.y + this.h/2);
-        CarArt.drawCar(ctx, {
-            w: this.w, h: this.h,
-            style: this.style,
-            color: this.color,
-            /* gentle lane-keeping wobble */
-            steer: Math.sin((roadOffset + this.phaseOff) * 0.012) * 0.16,
-            brake: braking,
-            boost: 0,
-            phase: roadOffset + this.phaseOff
-        });
-        ctx.restore();
-    }
+    /* world-space position + the bits the 3D renderer needs */
+    get wx() { return wx(this.x + this.w / 2); }
+    get wz() { return wz(this.y + this.h / 2); }
+    get steer() { return Math.sin((roadOffset + this.phaseOff) * 0.012) * 0.16; }
+    get phase() { return roadOffset + this.phaseOff; }
 }
 
 class Star {
@@ -414,46 +416,41 @@ class Star {
         this.x = lanes[Math.floor(Math.random() * lanes.length)]; this.y = -250; this.rot = 0;
     }
     update() { this.y += speed * 0.08; this.rot += 0.05; }
-    draw() {
-        ctx.save(); ctx.translate(this.x, this.y); ctx.rotate(this.rot);
-        /* rotating hex frame around the pickup */
-        ctx.strokeStyle = 'rgba(255,234,0,0.35)'; ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        for (let i = 0; i <= 6; i++) {
-            const a = (i * 60 - 90) * Math.PI / 180;
-            const rr = this.r * 1.6;
-            i === 0 ? ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr) : ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
-        }
-        ctx.stroke();
-        ctx.shadowBlur = 20; ctx.shadowColor = '#ffea00';
-        ctx.fillStyle = '#ffea00';
-        ctx.beginPath();
-        for (let i = 0; i < 5; i++) {
-            ctx.lineTo(Math.cos((18 + i * 72) * Math.PI / 180) * this.r, -Math.sin((18 + i * 72) * Math.PI / 180) * this.r);
-            ctx.lineTo(Math.cos((54 + i * 72) * Math.PI / 180) * (this.r/2), -Math.sin((54 + i * 72) * Math.PI / 180) * (this.r/2));
-        }
-        ctx.closePath(); ctx.fill();
-        /* inner facet so the star reads as a solid, not a flat blob */
-        ctx.shadowBlur = 0; ctx.fillStyle = 'rgba(255,255,255,0.75)';
-        ctx.beginPath();
-        for (let i = 0; i < 5; i++) {
-            ctx.lineTo(Math.cos((18 + i * 72) * Math.PI / 180) * (this.r * 0.42), -Math.sin((18 + i * 72) * Math.PI / 180) * (this.r * 0.42));
-        }
-        ctx.closePath(); ctx.fill();
-        ctx.restore();
-    }
+    get wx() { return wx(this.x); }
+    get wz() { return wz(this.y); }
 }
 
+/* screen-space particle (unchanged maths) that the 3D renderer reads */
 class Particle {
     constructor(x, y, color, vy, size) {
         this.x = x; this.y = y; this.color = color;
         this.vx = Math.random() * 4 - 2; this.vy = vy; this.alpha = 1; this.size = size;
+        this.rgb = parseColor(color);
     }
     update() { this.x += this.vx; this.y += this.vy; this.alpha -= 0.05; }
-    draw() {
-        ctx.save(); ctx.globalAlpha = this.alpha; ctx.fillStyle = this.color;
-        ctx.beginPath(); ctx.arc(this.x, this.y, this.size, 0, Math.PI*2); ctx.fill(); ctx.restore();
+    get wx() { return wx(this.x); }
+    get wz() { return wz(this.y); }
+    get wy() { return 6 + (1 - this.alpha) * 26; }        /* smoke rises as it fades */
+    get r() { return this.rgb[0]; }
+    get g() { return this.rgb[1]; }
+    get b() { return this.rgb[2]; }
+    get a() { return Math.max(0, this.alpha); }
+}
+
+/* '#rgb' | '#rrggbb' | 'rgba(r,g,b,a)' -> 0..1 components */
+const _pcCache = {};
+function parseColor(c) {
+    if (_pcCache[c]) return _pcCache[c];
+    let out = [1, 1, 1];
+    const m = String(c).match(/^rgba?\(\s*([\d.]+)[\s,]+([\d.]+)[\s,]+([\d.]+)/i);
+    if (m) out = [+m[1] / 255, +m[2] / 255, +m[3] / 255];
+    else {
+        let h = String(c).replace('#', '');
+        if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+        const n = parseInt(h, 16) || 0;
+        out = [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
     }
+    return (_pcCache[c] = out);
 }
 
 function restartGame() {
@@ -559,165 +556,30 @@ function showFinalLeaderboard() {
     });
 }
 
-function drawOpponents() {
-    if(!isMultiplayer || !opponentsData) return;
+/* rival drivers are drawn as real cars in the 3D world, ahead of or behind
+   you according to their score, with a floating name tag */
+function syncOpponents() {
+    if(!world || !isMultiplayer || !opponentsData) { if(world) world.syncGhosts([], roadOffset); return; }
+    const ghosts = [];
     for(let id in opponentsData) {
-        if(id === myId) continue; 
-        let opp = opponentsData[id];
-        let drawY = player.y - (opp.score - score) * 3;
-        
+        if(id === myId) continue;
+        const opp = opponentsData[id];
+        const drawY = player.y - (opp.score - score) * 3;
         if(drawY > -300 && drawY < gameHeight + 100) {
-            ctx.save();
-            ctx.translate(opp.x + 22, drawY + 42.5); 
-            CarArt.drawCar(ctx, {
-                w: 44, h: 85,
-                /* a fixed body shape per driver so rivals stay recognisable */
+            ghosts.push({
+                wx: wx(opp.x + 22), wz: wz(drawY + 42.5),
                 style: ['sports', 'sedan', 'coupe'][(id.charCodeAt(0) + id.length) % 3],
                 color: opp.color || '#a200ff',
-                alpha: 0.85,
-                steer: Math.sin((roadOffset + (opp.score % 50)) * 0.01) * 0.2,
-                brake: 0,
-                boost: 0,
-                phase: roadOffset + (opp.score % 100),
-                name: opp.name
+                name: opp.name,
+                steer: Math.sin((roadOffset + (opp.score % 50)) * 0.01) * 0.2
             });
-            ctx.restore();
         }
     }
-}
-
-/* ------------------------------------------------------------------ *
- *  ROAD — pure decoration. Asphalt grain, kerbs, lane markings,
- *  roadside posts, horizon haze and nitro speed streaks.
- * ------------------------------------------------------------------ */
-let roadTex = null;
-function buildRoadTexture() {
-    const c = document.createElement('canvas');
-    c.width = gameWidth - 40; c.height = 256;
-    const g = c.getContext('2d');
-    g.fillStyle = '#08080f'; g.fillRect(0, 0, c.width, c.height);
-    for (let i = 0; i < 2400; i++) {                       /* asphalt grain */
-        g.fillStyle = `rgba(255,255,255,${Math.random() * 0.05 + 0.01})`;
-        g.fillRect(Math.random() * c.width, Math.random() * c.height, Math.random() * 2 + 1, Math.random() * 2 + 1);
-    }
-    for (let i = 0; i < 26; i++) {                         /* polished tyre lines */
-        g.fillStyle = `rgba(0,0,0,${Math.random() * 0.25 + 0.08})`;
-        g.fillRect(Math.random() * c.width, Math.random() * c.height, Math.random() * 3 + 1, Math.random() * 70 + 30);
-    }
-    roadTex = ctx.createPattern(c, 'repeat');
-}
-try { buildRoadTexture(); } catch (e) { roadTex = null; }
-
-/* one lane dash, slightly wider at the near end (perspective) */
-function laneDash(cx, y, w, h) {
-    ctx.beginPath();
-    ctx.moveTo(cx - w * 0.35, y);
-    ctx.lineTo(cx + w * 0.35, y);
-    ctx.lineTo(cx + w * 0.65, y + h);
-    ctx.lineTo(cx - w * 0.65, y + h);
-    ctx.closePath();
-    ctx.fill();
-}
-
-function drawRoad() {
-    const L = 20, R = gameWidth - 20;
-
-    ctx.fillStyle = '#020206'; ctx.fillRect(0, 0, gameWidth, gameHeight);   /* void */
-    ctx.fillStyle = '#08080f'; ctx.fillRect(L, 0, R - L, gameHeight);       /* asphalt */
-
-    if (roadTex) {
-        ctx.save();
-        ctx.beginPath(); ctx.rect(L, 0, R - L, gameHeight); ctx.clip();
-        ctx.translate(0, roadOffset % 256);
-        ctx.fillStyle = roadTex;
-        ctx.fillRect(L, -256, R - L, gameHeight + 256);
-        ctx.restore();
-    }
-
-    /* faint transverse seams = sense of speed */
-    ctx.save();
-    ctx.beginPath(); ctx.rect(L, 0, R - L, gameHeight); ctx.clip();
-    ctx.fillStyle = 'rgba(255,255,255,0.025)';
-    const seamY = (roadOffset * 1.6) % 130;
-    for (let y = -130; y < gameHeight; y += 130) ctx.fillRect(L, y + seamY, R - L, 3);
-    ctx.restore();
-
-    /* rumble kerbs on both shoulders */
-    const kerbH = 26, kerbW = 12, kOff = roadOffset % (kerbH * 2);
-    for (let i = -2; i < gameHeight / kerbH + 2; i++) {
-        const y = i * kerbH + kOff, on = (i % 2 === 0);
-        ctx.fillStyle = on ? 'rgba(0,240,255,0.45)' : 'rgba(8,8,18,0.9)';
-        ctx.fillRect(L, y, kerbW, kerbH);
-        ctx.fillStyle = on ? 'rgba(255,0,85,0.45)' : 'rgba(8,8,18,0.9)';
-        ctx.fillRect(R - kerbW, y, kerbW, kerbH);
-    }
-
-    /* lane markings */
-    ctx.fillStyle = 'rgba(255,255,255,0.20)';
-    let lineY = roadOffset % 80;
-    for (let y = -80; y < gameHeight; y += 80) {
-        laneDash(gameWidth * 0.25, y + lineY, 2, 40);
-        laneDash(gameWidth * 0.50, y + lineY, 4, 40);
-        laneDash(gameWidth * 0.75, y + lineY, 2, 40);
-    }
-
-    /* nitro speed streaks */
-    if (isNitro) {
-        ctx.fillStyle = 'rgba(190,245,255,0.30)';
-        const sOff = (roadOffset * 2.5) % 220;
-        for (let i = 0; i < 14; i++) {
-            const x = 30 + ((i * 97) % (gameWidth - 60));
-            const y = (i * 137 + sOff) % (gameHeight + 220) - 110;
-            ctx.fillRect(x, y, 2, 40 + (i % 3) * 30);
-        }
-    }
-
-    /* neon barriers */
-    ctx.save();
-    ctx.shadowBlur = 15; ctx.shadowColor = '#00f0ff'; ctx.fillStyle = '#00f0ff';
-    ctx.fillRect(18, 0, 4, gameHeight);
-    ctx.shadowColor = '#ff0055'; ctx.fillStyle = '#ff0055';
-    ctx.fillRect(gameWidth - 22, 0, 4, gameHeight);
-    ctx.restore();
-
-    /* roadside marker posts */
-    const postGap = 110, pOff = roadOffset % postGap;
-    for (let y = -postGap; y < gameHeight + postGap; y += postGap) {
-        ctx.fillStyle = 'rgba(0,240,255,0.5)';  ctx.fillRect(6, y + pOff, 8, 26);
-        ctx.fillStyle = 'rgba(255,0,85,0.5)';   ctx.fillRect(gameWidth - 14, y + pOff, 8, 26);
-    }
-
-    /* haze at the far end of the track */
-    const haze = ctx.createLinearGradient(0, 0, 0, 150);
-    haze.addColorStop(0, 'rgba(0,240,255,0.16)');
-    haze.addColorStop(1, 'rgba(0,240,255,0)');
-    ctx.fillStyle = haze; ctx.fillRect(0, 0, gameWidth, 150);
-}
-
-/* tracer round: tapered shell + bright core (same hit-box as before) */
-function drawBullet(b) {
-    const x = b.x, y = b.y, w = b.w, h = b.h;
-    ctx.beginPath();
-    ctx.moveTo(x, y);
-    ctx.lineTo(x + w / 2, y + h * 0.20);
-    ctx.lineTo(x + w * 0.34, y + h);
-    ctx.lineTo(x - w * 0.34, y + h);
-    ctx.lineTo(x - w / 2, y + h * 0.20);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.fillRect(x - w * 0.12, y + h * 0.18, w * 0.24, h * 0.62);
-    ctx.fillStyle = '#ffea00';
+    world.syncGhosts(ghosts, roadOffset);
 }
 
 function render() {
-    ctx.clearRect(0,0, gameWidth, gameHeight);
-    ctx.save();
-
-    if(screenShake > 0) {
-        ctx.translate((Math.random()-0.5)*screenShake, (Math.random()-0.5)*screenShake);
-        screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0;
-    }
+    if(screenShake > 0) { screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0; }
 
     if(gameActive) {
         let nitroReq = (joyActive && joyDY < -14) || keys.w;
@@ -753,12 +615,15 @@ function render() {
         brakeActive = false;
     }
 
-    drawRoad();
+    if(world) {
+        world.scrollRoad(roadOffset);
+        world.setFovBoost(isNitro ? 1 : 0);
+        world.addShake(screenShake);
+    }
 
-    ctx.save();
-    ctx.fillStyle = '#ffea00'; ctx.shadowBlur = 15; ctx.shadowColor = '#ffea00';
+    /* ---- bullets: travel forward, kill traffic on contact ---- */
     for(let i = activeBullets.length - 1; i >= 0; i--) {
-        let b = activeBullets[i]; b.y -= 18; drawBullet(b);
+        let b = activeBullets[i]; b.y -= 18;
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
@@ -769,16 +634,17 @@ function render() {
         }
         if(b && b.y < -50) activeBullets.splice(i, 1);
     }
-    ctx.restore();
+    if(world) world.syncBullets(activeBullets);
 
     for(let i = particles.length - 1; i >= 0; i--) {
-        particles[i].update(); particles[i].draw();
+        particles[i].update();
         if(particles[i].alpha <= 0) particles.splice(i,1);
     }
+    if(world) world.syncParticles(particles);
 
     if(gameActive && Math.random() < 0.015 && stars.length < 2) stars.push(new Star());
     for(let i = stars.length - 1; i >= 0; i--) {
-        stars[i].update(); stars[i].draw();
+        stars[i].update();
         if(gameActive && player && Math.abs(player.x + player.w/2 - stars[i].x) < player.w/2 + stars[i].r && Math.abs(player.y + player.h/2 - stars[i].y) < player.h/2 + stars[i].r) {
             nitro = Math.min(100, nitro + 20); bullets++; updateAmmoUI(); score += 150; playSfx(900, 'sine', 0.25, 0.3);
             for(let k=0; k<15; k++) particles.push(new Particle(stars[i].x, stars[i].y, '#ffea00', (Math.random()-0.5)*8, Math.random()*4+2));
@@ -786,18 +652,20 @@ function render() {
         }
         if(stars[i].y > gameHeight + 100) stars.splice(i, 1);
     }
+    if(world) world.syncStars(stars, roadOffset);
 
     if(gameActive && Math.random() < 0.038 && enemies.length < 5) enemies.push(new Enemy());
     for(let i = enemies.length - 1; i >= 0; i--) {
-        enemies[i].update(); enemies[i].draw();
+        enemies[i].update();
         if(gameActive && player && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
             triggerCrash();
             enemies.splice(i, 1); continue;
         }
         if(enemies[i].y > gameHeight + 100) { enemies.splice(i, 1); if(gameActive) score += 30; }
     }
+    if(world) world.syncEnemies(enemies, speed, player ? wz(player.y + player.h / 2) : 0);
 
-    drawOpponents();
+    syncOpponents();
 
     if(player) {
         if(gameActive) player.update();
@@ -805,13 +673,23 @@ function render() {
     }
 
     if (screenFlash > 0) {
-        ctx.fillStyle = `rgba(255, 255, 255, ${screenFlash})`;
-        ctx.fillRect(0, 0, gameWidth, gameHeight); screenFlash -= 0.05;
+        flashEl.style.opacity = screenFlash;
+        screenFlash -= 0.05;
+    } else if (flashEl.style.opacity !== '0') {
+        flashEl.style.opacity = '0';
     }
 
-    ctx.restore();
+    if(world) world.render();
     requestAnimationFrame(render);
 }
+
+const flashEl = document.getElementById('flash');
+
+/* the lobby buttons are wired with onclick="" in index.html, so the handlers
+   have to live on window now that this file is an ES module */
+Object.assign(window, {
+    createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby
+});
 
 player = new Player();
 requestAnimationFrame(render);
