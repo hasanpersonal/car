@@ -19,19 +19,21 @@ const NEAR_Z = 560;                 // road extends this far behind the car
 const FAR_Z = -4200;                // ... and this far ahead
 const SPAN = NEAR_Z - FAR_Z;
 
-/* Chase camera constants. These were solved numerically: the car's bounding
+/* Chase camera constants (tunable from the console via the exported object).
+   These were solved numerically: the car's bounding
    box was projected on six device shapes with the car in the centre lane and
    pushed to the outermost lane, minimising off-screen area, top clipping,
    intrusion into the bottom thumb zone and a horizon outside 4-40%.
-   Result: the car occupies 48-62% of screen height on every phone shape, so
-   the whole bottom third stays clear for the SHOOT buttons and joystick. */
-const CAM = {
+   Result: the car's centre sits at 62% of screen height (top 55%, bottom 70%)
+   on every phone shape, 117-154 px tall, horizon at 10%. The SHOOT buttons
+   do not start until ~87%, so the car still clears them by a wide margin. */
+export const CAM = {
     fov: 60,
     follow: 0.65,       // how much the camera slides sideways with the car
     camY: 220,          // camera height above the road
-    camZ: 350,          // camera distance behind the car
+    camZ: 330,          // camera distance behind the car
     lookY: -90,         // aim point: below road level, well up the track
-    lookZ: -240         // ... which puts the horizon near the top of the screen
+    lookZ: -340         // shallow aim: drops the car to ~62% of screen height
 };
 
 export class World {
