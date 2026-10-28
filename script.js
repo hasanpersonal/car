@@ -29,6 +29,12 @@ let score = 0, speed = 0, targetSpeed = 0;
 let nitro = 0, bullets = 0; 
 let isNitro = false;
 let screenShake = 0, roadOffset = 0, screenFlash = 0; 
+
+/* --- skills: both cost 5 ammo --- */
+const SKILL_COST = 5;
+const GHOST_FRAMES = 180;                 // 3 seconds at 60fps
+let ghostActive = false, ghostTimer = 0;
+
 let player;
 let enemies = [], stars = [], activeBullets = [], particles = [];
 
@@ -63,6 +69,8 @@ window.addEventListener('orientationchange', () => setTimeout(() => world && wor
 const hud = document.getElementById('hud');
 const btnLeft = document.getElementById('shoot-btn-left');
 const btnRight = document.getElementById('shoot-btn-right');
+const btnSkillLeft = document.getElementById('skill-btn-left');
+const btnSkillRight = document.getElementById('skill-btn-right');
 const joyContainer = document.getElementById('joystick-container');
 const joyKnob = document.getElementById('joystick-knob');
 
@@ -133,6 +141,8 @@ function listenToRoom() {
             hud.style.display = 'none';
             btnLeft.style.display = 'none';
             btnRight.style.display = 'none';
+            if(btnSkillLeft) btnSkillLeft.style.display = 'none';
+            if(btnSkillRight) btnSkillRight.style.display = 'none';
 
             const list = document.getElementById('players-list');
             list.innerHTML = "";
@@ -241,6 +251,8 @@ function initGameAndFullscreen() {
     hud.style.display = 'block';
     btnLeft.style.display = 'flex';
     btnRight.style.display = 'flex';
+    if(btnSkillLeft) btnSkillLeft.style.display = 'flex';
+    if(btnSkillRight) btnSkillRight.style.display = 'flex';
     restartGame();
 }
 
@@ -269,7 +281,7 @@ function playSfx(freq, type, dur, vol) {
 const gameContainer = document.getElementById('game-container');
 gameContainer.addEventListener('touchstart', (e) => {
     if (!gameActive) return;
-    if (e.target.closest('.shoot-btn') || e.target.closest('.overlay')) return;
+    if (e.target.closest('.shoot-btn') || e.target.closest('.skill-btn') || e.target.closest('.overlay')) return;
 
     let currentTime = new Date().getTime();
     let tapLength = currentTime - lastTapTime;
@@ -277,6 +289,7 @@ gameContainer.addEventListener('touchstart', (e) => {
     if (tapLength < 300 && tapLength > 0 && bullets >= 10) {
         bullets -= 10; updateAmmoUI();
         enemies.forEach(en => {
+            if (world) world.wreck(en.style, en.color, en.wx, en.wz, 1.15);
             for(let k=0; k<25; k++) particles.push(new Particle(en.x + en.w/2, en.y + en.h/2, '#ff0055', (Math.random()-0.5)*12, Math.random()*5+2));
             score += 100;
         });
@@ -336,19 +349,75 @@ window.addEventListener('keyup', e => {
     if(e.key === 's' || e.key === 'ArrowDown') keys.s = false;
 });
 
-btnLeft.addEventListener('touchstart', (e) => { shootBullet(); e.preventDefault(); e.stopPropagation(); });
-btnRight.addEventListener('touchstart', (e) => { shootBullet(); e.preventDefault(); e.stopPropagation(); });
+function bindButton(el, fn) {
+    if (!el) return;
+    const run = (e) => { fn(); e.preventDefault(); e.stopPropagation(); };
+    el.addEventListener('touchstart', run, { passive: false });
+    el.addEventListener('mousedown', run);
+}
+bindButton(btnLeft, shootBullet);
+bindButton(btnRight, shootBullet);
+bindButton(btnSkillLeft, useGhost);
+bindButton(btnSkillRight, useNuke);
 
 function shootBullet() {
     if(!gameActive || bullets <= 0) return;
     bullets--; playSfx(600, 'triangle', 0.15, 0.3);
-    activeBullets.push({ x: player.x + player.w / 2, y: player.y, w: 6, h: 22 });
+    activeBullets.push(new Bullet(player.x + player.w / 2 - 3, player.y));
     updateAmmoUI();
 }
 
 function updateAmmoUI() {
     document.querySelectorAll('.ammo-count').forEach(c => c.innerText = `${bullets} BULLETS`);
     document.querySelectorAll('.shoot-btn').forEach(b => bullets <= 0 ? b.classList.add('empty') : b.classList.remove('empty'));
+    updateSkillUI();
+}
+
+/* GHOST (left): 5 ammo buys 3 seconds of phasing through traffic, blinking
+   visible / invisible the whole time.  NUKE (right): 5 ammo wipes the road. */
+function updateSkillUI() {
+    const afford = bullets >= SKILL_COST && gameActive;
+    if (btnSkillLeft) {
+        btnSkillLeft.classList.toggle('empty', !(afford && !ghostActive));
+        btnSkillLeft.classList.toggle('ghosting', ghostActive);
+        const sub = btnSkillLeft.querySelector('.skill-sub');
+        if (sub) sub.innerText = ghostActive ? `${Math.ceil(ghostTimer / 60)}s` : `${SKILL_COST} AMMO`;
+    }
+    if (btnSkillRight) btnSkillRight.classList.toggle('empty', !afford);
+}
+
+function useGhost() {
+    if(!gameActive || bullets < SKILL_COST || ghostActive) return;
+    bullets -= SKILL_COST;
+    ghostActive = true;
+    ghostTimer = GHOST_FRAMES;
+    playSfx(760, 'sine', 0.35, 0.22);
+    updateAmmoUI();
+}
+
+function useNuke() {
+    if(!gameActive || bullets < SKILL_COST) return;
+    bullets -= SKILL_COST;
+    /* every car on the road liquefies at once */
+    for (const e of enemies) {
+        if (world) world.wreck(e.style, e.color, e.wx, e.wz, 1.15);
+        for (let k = 0; k < 16; k++)
+            particles.push(new Particle(e.x + e.w / 2, e.y + e.h / 2, e.color, (Math.random() - 0.5) * 14, Math.random() * 6 + 2));
+        score += 100;
+    }
+    enemies = [];
+    playSfx(150, 'square', 0.7, 0.6);
+    screenShake = 30;
+    screenFlash = 1.0;
+    updateAmmoUI();
+}
+
+/* Bullets used to be plain {x,y} objects, so the 3D renderer was fed
+   undefined coordinates and drew them nowhere. Now they expose world space. */
+class Bullet {
+    constructor(x, y) { this.x = x; this.y = y; this.w = 6; this.h = 22; }
+    get wx() { return wx(this.x + this.w / 2); }
+    get wz() { return wz(this.y + this.h / 2); }
 }
 
 class Player {
@@ -379,13 +448,14 @@ class Player {
         
         this.y += ((gameHeight - 160) - this.y) * 0.05;
     }
-    draw() {
+    draw(hidden) {
         if(!world) return;
         world.setPlayer(wx(this.x + this.w / 2), wz(this.y + this.h / 2), {
             steer: Math.max(-1, Math.min(1, this.vx / 9)),
             brake: brakeActive ? 1 : 0,
             boost: isNitro ? 1 : 0,
-            phase: roadOffset
+            phase: roadOffset,
+            hidden: !!hidden
         });
     }
 }
@@ -459,6 +529,7 @@ function restartGame() {
     score = 0; speed = 0; nitro = 0; bullets = 0;
     raceTimeLeft = 60; 
     gameActive = true; joyActive = false; joyTouchId = null; screenFlash = 0;
+    ghostActive = false; ghostTimer = 0;
     joyContainer.style.display = 'none'; updateAmmoUI();
     document.getElementById('gameover-screen').classList.add('hidden');
     document.getElementById('leaderboard-box').style.display = 'none';
@@ -519,6 +590,18 @@ function backToLobby() {
         document.getElementById('gameover-screen').classList.add('hidden');
         document.getElementById('start-screen').classList.remove('hidden');
     }
+}
+
+/* A collision animates BOTH cars: the traffic car wrecks and sprays liquid,
+   the player's car is thrown into a spin. */
+function crashInto(e) {
+    if (world) {
+        world.wreck(e.style, e.color, e.wx, e.wz, 1.25);
+        world.spawnSplatter(wx(player.x + player.w / 2), wz(player.y + player.h * 0.35),
+                            isNitro ? '#00f0ff' : '#ffaa22', 1.3);
+        world.playerHit();
+    }
+    triggerCrash();
 }
 
 function triggerCrash() {
@@ -589,7 +672,7 @@ function render() {
         
         // --- Nitro Speed set to 560 & Burn Rate set to 0.24 ---
         if(isNitro) { targetSpeed = 560; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
-        else if (brakeReq) targetSpeed = 100; else targetSpeed = 210; 
+        else if (brakeReq) targetSpeed = 80; else targetSpeed = 210; 
 
         speed += (targetSpeed - speed) * 0.08;
         score += (speed * 0.015);
@@ -626,7 +709,9 @@ function render() {
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
-                for(let k=0; k<25; k++) particles.push(new Particle(e.x + e.w/2, e.y + e.h/2, '#ff0055', (Math.random()-0.5)*12, Math.random()*5+2));
+                /* the shot car tumbles away and sprays liquid */
+                if(world) world.wreck(e.style, e.color, e.wx, e.wz, 1);
+                for(let k=0; k<25; k++) particles.push(new Particle(e.x + e.w/2, e.y + e.h/2, e.color, (Math.random()-0.5)*12, Math.random()*5+2));
                 playSfx(300, 'sawtooth', 0.2, 0.25);
                 enemies.splice(j, 1); activeBullets.splice(i, 1); score += 100; break;
             }
@@ -656,8 +741,8 @@ function render() {
     if(gameActive && Math.random() < 0.038 && enemies.length < 5) enemies.push(new Enemy());
     for(let i = enemies.length - 1; i >= 0; i--) {
         enemies[i].update();
-        if(gameActive && player && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
-            triggerCrash();
+        if(gameActive && player && !ghostActive && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
+            crashInto(enemies[i]);
             enemies.splice(i, 1); continue;
         }
         if(enemies[i].y > gameHeight + 100) { enemies.splice(i, 1); if(gameActive) score += 30; }
@@ -666,9 +751,19 @@ function render() {
 
     syncOpponents();
 
+    /* ---- ghost skill countdown + blink ---- */
+    let playerHidden = false;
+    if(ghostActive) {
+        ghostTimer--;
+        const period = ghostTimer < 60 ? 4 : 6;             // blinks faster as it runs out
+        playerHidden = Math.floor(ghostTimer / period) % 2 === 1;
+        if(ghostTimer % 15 === 0) updateSkillUI();
+        if(ghostTimer <= 0) { ghostActive = false; playerHidden = false; updateSkillUI(); }
+    }
+
     if(player) {
         if(gameActive) player.update();
-        player.draw();
+        player.draw(playerHidden);
     }
 
     if (screenFlash > 0) {
@@ -687,7 +782,8 @@ const flashEl = document.getElementById('flash');
 /* the lobby buttons are wired with onclick="" in index.html, so the handlers
    have to live on window now that this file is an ES module */
 Object.assign(window, {
-    createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby
+    createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby,
+    useGhost, useNuke, shootBullet
 });
 
 player = new Player();
