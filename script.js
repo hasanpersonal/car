@@ -57,6 +57,10 @@ const NPC_SPEED = 60;
 /* Top speeds: slower than before now that the road is busier. */
 const SPEED_CRUISE = 160, SPEED_NITRO = 420, SPEED_BRAKE = 60;
 
+/* --- race length: 2.5 minutes --- */
+const RACE_SECONDS = 150;
+const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;
+
 /* --- skills: both cost 5 ammo --- */
 const SKILL_COST = 5;
 const GHOST_FRAMES = 180;                 // 3 seconds at 60fps
@@ -65,7 +69,7 @@ let ghostActive = false, ghostTimer = 0;
 let player;
 let enemies = [], stars = [], activeBullets = [], particles = [];
 
-let raceTimeLeft = 60; 
+let raceTimeLeft = RACE_SECONDS; 
 let timerInterval = null;
 let lastEnemyCount = -1;
 
@@ -747,18 +751,19 @@ function restartGame() {
     player = new Player();
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = 0; bullets = 0; crashStun = 0;
-    raceTimeLeft = 60; 
+    raceTimeLeft = RACE_SECONDS; 
     gameActive = true; joyActive = false; joyTouchId = null; screenFlash = 0;
     ghostActive = false; ghostTimer = 0;
     joyContainer.style.display = 'none'; updateAmmoUI();
     document.getElementById('gameover-screen').classList.add('hidden');
     document.getElementById('leaderboard-box').style.display = 'none';
+    document.getElementById('timer-txt').innerText = fmtTime(RACE_SECONDS);
 
     if(timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
         if(gameActive) {
             raceTimeLeft--;
-            document.getElementById('timer-txt').innerText = `${raceTimeLeft}s`;
+            document.getElementById('timer-txt').innerText = fmtTime(raceTimeLeft);
             if(raceTimeLeft <= 0) {
                 endRaceDuration();
             }

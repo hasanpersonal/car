@@ -201,12 +201,13 @@ export class World {
     }
 
     /* ---------------------------------------------------------------- *
-     *  nitro: air tearing past the car
-     *  Long streaks that spawn far ahead and rip backwards past the
-     *  cockpit, so boosting reads as speed instead of just colour.
+     *  nitro: air tearing past the car, down the two outside lanes
+     *  Deliberately light: a handful of short streaks out by the edges,
+     *  so boosting reads as speed without washing out the middle of the
+     *  road where the traffic is.
      * ---------------------------------------------------------------- */
     _buildAirStreaks() {
-        const N = 120;
+        const N = 36;
         this.airN = N;
         this.airPos = new Float32Array(N * 6);
         this.airData = [];
@@ -233,13 +234,15 @@ export class World {
 
     _respawnAir(a, spread) {
         const side = Math.random() < 0.5 ? -1 : 1;
-        a.x = side * (26 + Math.random() * 108);
-        a.y = 1 + Math.random() * 40;
+        /* side lanes only: the road spans -220..220 and the outer lanes sit
+           near +-180, so the streaks run well clear of the racing line */
+        a.x = side * (150 + Math.random() * 55);
+        a.y = 1 + Math.random() * 22;
         a.z = spread
             ? this._playerZ - 1300 + Math.random() * 1700
             : this._playerZ - 950 - Math.random() * 650;
-        a.len = 45 + Math.random() * 110;
-        a.spd = 22 + Math.random() * 30;
+        a.len = 40 + Math.random() * 60;
+        a.spd = 20 + Math.random() * 14;
     }
 
     _updateAir() {
@@ -259,13 +262,13 @@ export class World {
             const a = this.airData[i];
             a.z += a.spd * (0.45 + L * 1.55);
             if (a.z - pz > 430) { this._respawnAir(a, false); }
-            const len = a.len * (0.35 + L * 1.25);
+            const len = a.len * (0.5 + L * 0.9);
             const o = i * 6;
             arr[o] = a.x;     arr[o + 1] = a.y; arr[o + 2] = a.z;
             arr[o + 3] = a.x; arr[o + 4] = a.y; arr[o + 5] = a.z + len;
         }
         this.airGeo.attributes.position.needsUpdate = true;
-        this.air.material.opacity = 0.10 + 0.42 * L;
+        this.air.material.opacity = 0.08 + 0.26 * L;
     }
 
     /* ---------------------------------------------------------------- *
