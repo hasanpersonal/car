@@ -1,0 +1,4 @@
+
+# dev-only test harness (node + stubbed DOM/WebGL). Not part of the site.
+tests/
+node_modules/
