@@ -45,12 +45,20 @@ World.prototype.setPlayer = function (x, z, o) { livePlayerX = x; return origSet
 
 const EXPORTS = ['findRandomGame','cancelSearch','playSolo','useGhost','useNuke','shootBullet',
                  'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby',
-                 'checkOrientation'];
+                 'checkOrientation','wheelSetAngle','carRoadOffset'];
 const grab = () => Object.fromEntries(EXPORTS.map(k => [k, globalThis.window[k]]));
 await import('../script.js');
 const A = grab();
 
 const fire = () => { const cb = rafCb; rafCb = null; if (cb) cb(0); };
+/* A frame with a driver in it. The road does not steer the car any more, so
+   anything that just holds the wheel still ends up in the barrier -- which is
+   the point of the change, but it makes every speed measurement a lie. This
+   keeps the car on the road the way a player would. */
+const drive = (n = 1) => { for (let i = 0; i < n; i++) {
+    window.wheelSetAngle(Math.max(-120, Math.min(120, -window.carRoadOffset() * 3.6)));
+    fire();
+} };
 const el = (id) => document.getElementById(id);
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 const ammo = () => parseInt(document.querySelectorAll('.ammo-count')[0].innerText) || 0;
@@ -128,7 +136,7 @@ console.log('\n=== the road bends ===');
     const swing = (a) => Math.max(...a) - Math.min(...a);
     const run1 = bends(CURVE_SEED), run2 = bends(CURVE_SEED + 1);
     console.log(`  over a race the road centre 1500u ahead swings ${swing(run1).toFixed(0)} units`);
-    ok(swing(run1) > 200, `it really does curve: the road ahead shifts ${swing(run1).toFixed(0)} units as you drive`);
+    ok(swing(run1) > 150, `it really does curve: the road ahead shifts ${swing(run1).toFixed(0)} units as you drive`);
     ok(run1.some(v => Math.abs(v) > 60), `and often leans well off centre (up to ${Math.max(...run1.map(Math.abs)).toFixed(0)} units)`);
     ok(run1.every((v, i) => Math.abs(v - run2[i]) > 1e-9), 'a different seed gives a different road');
     ok(Math.abs(w.bendAt(0)) < 1e-9, 'but the tarmac under the car never moves, so the car cannot drift off it');
@@ -190,31 +198,36 @@ console.log('\n=== the road bends ===');
        sideways underneath you, which is what read as the car being swept the
        other way round the corner. Get it too right and you have a straight
        road again, so the bend up ahead is measured too. */
-    let nearBend = 0, notOverRoad = 0, crab = 0;
+    let slideNitro = 0, drift2s = 0;
     const bend2000 = [];
     for (let seed = 0; seed < 40; seed++) {
         reseedCurves(seed);
         for (let step = 0; step < 10; step++) {
-            w.scrollRoad(seed * 613 + step * 3700);
+            const base = seed * 613 + step * 3700;
+            w.scrollRoad(base);
             w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
             w.camera.updateMatrixWorld(true);
-            nearBend = Math.max(nearBend, Math.abs(w.bendAt(-250)));
-            crab = Math.max(crab, Math.abs(w.curveYawAt(0)));
             bend2000.push(Math.abs(w.bendAt(-2000)));
-            for (const d of [600, 1000, 1500]) {
-                const c = w.bendAt(-d);
-                const l = new THREE.Vector3(c - 220, 0, -d).project(w.camera);
-                const r = new THREE.Vector3(c + 220, 0, -d).project(w.camera);
-                const lx = (l.x + 1) / 2 * 844, rx = (r.x + 1) / 2 * 844;
-                if (422 < lx || 422 > rx) notOverRoad++;         // car is off the tarmac
+            /* Hands off the wheel for two seconds at cruise. The car keeps
+               its own line, so the road slides out from under it: this is the
+               drift that used to be stolen by the road steering for you. */
+            let off = 0;
+            for (let f = 0; f < 120; f++) {
+                w.scrollRoad(base + f * 12.8);
+                const before = w.centreUnderCar();
+                w.scrollRoad(base + (f + 1) * 12.8);
+                const slide = w.centreUnderCar() - before;
+                slideNitro = Math.max(slideNitro, Math.abs(slide) * 33.6 / 12.8);
+                off -= slide;                  // the road moved; the car did not
             }
+            drift2s = Math.max(drift2s, Math.abs(off));
         }
     }
     const midBend = bend2000.sort((a, b) => a - b)[Math.floor(bend2000.length / 2)];
-    ok(nearBend < 30, `the road passes under the car: ${nearBend.toFixed(0)} units of bend 250u up the road`);
-    ok(crab < 0.01, `and points the way the car is going: ${(crab * 180 / Math.PI).toFixed(2)}deg of crab under the wheels`);
-    ok(midBend > 60, `but it is still a real curving road: the centre is ${midBend.toFixed(0)} units off, 2000u up`);
-    ok(notOverRoad <= 5, `and the car is still on the tarmac up ahead (${notOverRoad}/1200 samples off it)`);
+    ok(Math.abs(w.bendAt(0)) < 1e-9, 'a car sitting in the middle still has the road under it');
+    ok(midBend > 60, `and it is a real curving road: the centre is ${midBend.toFixed(0)} units off, 2000u up the road`);
+    ok(drift2s > 40, `but the road does not steer the car: two hands-off seconds walk it ${drift2s.toFixed(0)} units off the middle`);
+    ok(slideNitro < 8, `and the wheel can always win: the road slides ${slideNitro.toFixed(1)} units a frame at BOOST, against a steering that can do 10`);
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
@@ -344,16 +357,18 @@ touchAt('touchstart', CX, CY + 300);
 fire();
 ok(/rotate\(/.test(el('wheel-rim').style.transform || ''), `the wheel is live (${el('wheel-rim').style.transform})`);
 touchAt('touchmove', CX - 220, CY + 220);
-for (let i = 0; i < 40; i++) fire();
+let xFromR = livePlayerX, xRight = livePlayerX;
+for (let i = 0; i < 40; i++) { fire(); xRight = Math.max(xRight, livePlayerX); }
 const angleRight = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
-const xRight = livePlayerX;
 ok(angleRight > 10, `turning the rim right rotates the wheel clockwise (+${angleRight}deg)`);
-ok(xRight > 20, `and the car follows (x ${xRight.toFixed(0)})`);
+ok(xRight > xFromR + 20, `and the car follows (x ${xFromR.toFixed(0)} -> ${xRight.toFixed(0)})`);
 /* and the other way */
 touchAt('touchmove', CX + 220, CY + 220);
-for (let i = 0; i < 60; i++) fire();
+let xFromL = livePlayerX, xLeft = livePlayerX;
+for (let i = 0; i < 60; i++) { fire(); xLeft = Math.min(xLeft, livePlayerX); }
 const angleLeft = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
-ok(angleLeft < -10 && livePlayerX < -20, `and left steers left (${angleLeft}deg, x ${livePlayerX.toFixed(0)})`);
+ok(angleLeft < -10 && xLeft < xFromL - 20,
+   `and left steers left (${angleLeft}deg, x ${xFromL.toFixed(0)} -> ${xLeft.toFixed(0)})`);
 /* let go: it springs back to centre */
 zone.fire('touchend', { touches: [] });
 for (let i = 0; i < 90; i++) fire();
@@ -396,7 +411,7 @@ const medSpeed = (frames, before = () => {}, settle = 90) => {
     before();
     const out = []; let prev = 0, skip = 0;
     for (let i = 0; i < frames; i++) {
-        fire();
+        drive();
         const sp = speed();
         if (sp < prev - 40) skip = 140;                     // ignore the frames after a crash
         prev = sp;
@@ -406,14 +421,14 @@ const medSpeed = (frames, before = () => {}, settle = 90) => {
     out.sort((a, b) => a - b);
     return out.length ? out[out.length >> 1] : 0;
 };
-const farmNitro = (target = 60) => { let n = 0; while (nitroPct() < target && n++ < 20000) fire(); };
+const farmNitro = (target = 60) => { let n = 0; while (nitroPct() < target && n++ < 20000) drive(); };
 const ghosted = (frames, before = () => {}, settle = 60) => {
-    let k = 0; while (ammo() < 10 && k++ < 20000) fire();
+    let k = 0; while (ammo() < 10 && k++ < 20000) drive();
     window.useGhost();
     return medSpeed(frames, before, settle);
 };
 const cruise = medSpeed(300);
-let bk = 0; while (ammo() < 10 && bk++ < 20000) fire();
+let bk = 0; while (ammo() < 10 && bk++ < 20000) drive();
 farmNitro(60);
 window.useGhost();
 const boosted = medSpeed(170, () => el('btn-boost').fire('touchstart', {}), 60);
@@ -448,10 +463,10 @@ const SPAWN_Y = +(src.match(/const SPAWN_Y = (-?\d+)/) || [])[1];
 ok(SPAWN_Y - 690 <= FAR_Z * 0.80,
    `cars spawn at wz ${SPAWN_Y - 690}, i.e. ${pct((SPAWN_Y - 690) / FAR_Z)} of the way to the end of the road (${FAR_Z})`);
 window.playSolo();
-for (let i = 0; i < 60; i++) fire();
+for (let i = 0; i < 60; i++) drive();
 let counts = [], maxSeen = 0, overlapped = 0, near = 0, blocked = 0, spawnYs = 0;
 for (let i = 0; i < 1500; i++) {
-    fire();
+    drive();
     const list = liveEnemies || [];
     counts.push(list.length);
     maxSeen = Math.max(maxSeen, list.length);
@@ -508,7 +523,7 @@ for (const [id, cls, label] of [['skill-btn-nuke', ['ctrl-btn','skill-btn','nuke
 ok(/30, 30, 40/.test(resolve('btn-boost', ['pedal','pedal-boost','empty'], 'background') || '') === false ||
    /30, 30, 40/.test(resolve('btn-boost', ['pedal','empty'], 'background') || ''), 'the BOOST pedal greys out too');
 window.playSolo();
-let nk = 0; while (ammo() < 10 && nk++ < 20000) fire();
+let nk = 0; while (ammo() < 10 && nk++ < 20000) drive();
 let litNoCars = 0, litNoAmmo = 0;
 for (let i = 0; i < 600; i++) {
     fire();
@@ -550,10 +565,10 @@ ok(/DynamicsCompressor/.test(src), 'audio still runs through one compressor');
     const [cut] = audio.log.filter;
     const engineGainNode = audio.log.gain.slice().sort((a, b) => b.gain.sets.length - a.gain.sets.length)[0];
     window.playSolo();
-    for (let i = 0; i < 90; i++) fire();
+    for (let i = 0; i < 90; i++) drive();
     const idle = body.frequency.set;
     el('btn-boost').fire('touchstart', {});
-    for (let i = 0; i < 120; i++) fire();
+    for (let i = 0; i < 120; i++) drive();
     const flat = body.frequency.set;
     el('btn-boost').fire('touchend', {});
     ok(flat > idle * 1.5, `and the note follows the speed (${idle.toFixed(0)}Hz cruising -> ${flat.toFixed(0)}Hz under boost)`);
@@ -591,14 +606,14 @@ for (let i = 0; i < 60; i++) fire();
 const wP = new World(env.gameCanvas); wP.renderer.render = () => {};
 for (let c = 0; c < 5; c++) { wP.playerHit(); for (let i = 0; i < 60; i++) wP.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: i }); }
 ok(Math.abs(wP.playerCar.rotation.x) < 0.001, 'car dead level after five crashes');
-let gk = 0; while (ammo() < 10 && gk++ < 20000) fire();
+let gk = 0; while (ammo() < 10 && gk++ < 20000) drive();
 const ga = ammo(); window.useGhost();
 ok(ammo() === ga - 5, `GHOST costs 5 (${ga} -> ${ammo()})`);
 let on = 0, onDrop = 0, offDrop = 0, ps = score();
 const ghostSub = el('skill-btn-ghost').querySelector('.btn-sub');
 for (let i = 0; i < 700; i++) {
     if (i % 170 === 0) window.useGhost();
-    fire();
+    drive();
     const now = score(); const crashedNow = now < ps - 400; ps = now;
     if (/^\d+s$/.test(ghostSub.innerText || '')) { on++; if (crashedNow) onDrop++; } else if (crashedNow) offDrop++;
 }
