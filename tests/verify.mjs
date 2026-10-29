@@ -82,6 +82,7 @@ function framing(W, H) {
         roadW: Math.abs(p(220, 0, 0).x - p(-220, 0, 0).x) / W,
         roadAhead: Math.abs(p(220, 0, -1500).x - p(-220, 0, -1500).x) / W,
         carTop: top / H, carBot: bot / H, carH: bot - top, carW: right - left,
+        carL: left, carR: right,
         horizon: p(0, 0, -100000).y / H,
         spawnY: p(0, 0, spawnZ).y / H,
         fog: Math.min(1, Math.max(0, (camDist - 700) / 2200))
@@ -112,12 +113,65 @@ ok(/@media \(orientation: landscape\)[\s\S]*max-width: none/.test(cssSrc),
    'landscape drops the portrait letterboxing so the road runs screen-wide');
 
 /* =================================================================== */
+console.log('\n=== sizes: everything big enough to hit, nothing in the way ===');
+/* resolve the clamps() the stylesheet actually uses, per screen shape.
+   Portrait and landscape each carry their own set of sizes. */
+const vmin = (W, H) => Math.min(W, H) / 100;
+const landBlock = (cssSrc.match(/@media \(orientation: landscape\) \{([\s\S]*?)\n\}/) || ['', ''])[1];
+const baseSrc = cssSrc.replace(landBlock, '');
+const triple = (src, re) => { const m = src.match(re); return m ? [+m[1], +m[2], +m[3]] : [NaN, NaN, NaN]; };
+const cl = ([min, v, max], W, H) => Math.min(Math.max(min, v * vmin(W, H)), max);
+const RE = {
+    wheel: /#wheel\s*\{[\s\S]*?width: clamp\((\d+)px, (\d+)vmin, (\d+)px\)/,
+    btn: /\.ctrl-btn\s*\{\s*width: clamp\((\d+)px, (\d+)vmin, (\d+)px\)/,
+    pedalH: /\.pedal\s*\{[\s\S]*?height: clamp\((\d+)px, (\d+)vmin, (\d+)px\)/,
+    brake: /\.pedal-brake\s*\{[^}]*width: clamp\((\d+)px, (\d+)vmin, (\d+)px\)/,
+    boost: /\.pedal-boost\s*\{[^}]*width: clamp\((\d+)px, (\d+)vmin, (\d+)px\)/
+};
+function layout(W, H) {
+    const port = H > W, src = port ? baseSrc : landBlock;
+    const off = (port ? 2.6 : 2.2) * vmin(W, H);
+    const wheel = cl(triple(src, RE.wheel), W, H);
+    const btn = cl(triple(src, RE.btn), W, H);
+    const gap = Math.min(Math.max(6, 1.8 * vmin(W, H)), 16);
+    const brakeW = cl(triple(src, RE.brake), W, H), boostW = cl(triple(src, RE.boost), W, H);
+    const pedalH = cl(triple(src, RE.pedalH), W, H);
+    const colW = Math.max(3 * btn + 2 * gap, brakeW + boostW + gap);
+    return {
+        wheel: { l: off, r: off + wheel, t: H - off - wheel, b: H - off, size: wheel },
+        col: { l: W - off - colW, r: W - off, t: H - off - (btn + gap + pedalH), b: H - off },
+        btn, brakeW, boostW, pedalH, gap, port
+    };
+}
+const hits = (a, b) => a.l < b.r && b.l < a.r && a.t < b.b && b.t < a.b;
+for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android landscape'],
+                             [926, 428, 'big landscape'], [360, 640, 'small portrait'],
+                             [320, 568, 'narrow portrait'], [480, 850, 'tall portrait']]) {
+    const L = layout(W, H), f = framing(W, H);
+    const car = { l: f.carL, r: f.carR, t: f.carTop * H, b: f.carBot * H };
+    console.log(`  ${label} ${W}x${H}: wheel ${L.wheel.size.toFixed(0)}px, buttons ${L.btn.toFixed(0)}px, ` +
+                `pedals ${L.brakeW.toFixed(0)}+${L.boostW.toFixed(0)}px tall ${L.pedalH.toFixed(0)}`);
+    ok(L.wheel.size >= (L.port ? 0.36 : 0.46) * Math.min(W, H),
+       `${W}x${H}: the wheel is a proper handful (${L.wheel.size.toFixed(0)}px, ${pct(L.wheel.size / Math.min(W, H))} of the short edge)`);
+    ok(L.btn >= 46 && L.pedalH >= 52 && L.brakeW >= 70 && L.boostW >= 58,
+       `${W}x${H}: buttons ${L.btn.toFixed(0)}px, pedals ${L.brakeW.toFixed(0)}x${L.pedalH.toFixed(0)} — thumb-sized`);
+    ok(!hits(L.wheel, car) && !hits(L.col, car),
+       `${W}x${H}: controls stay off the car (car x ${car.l.toFixed(0)}-${car.r.toFixed(0)}, wheel ends ${L.wheel.r.toFixed(0)}, pedals start ${L.col.l.toFixed(0)})`);
+    ok(!hits(L.wheel, L.col), `${W}x${H}: and off each other (${(L.col.l - L.wheel.r).toFixed(0)}px apart)`);
+    ok(L.wheel.t > 0 && L.col.t > 0 && L.wheel.r < W && L.col.l > 0, `${W}x${H}: everything fits on screen`);
+}
+const landL = layout(844, 390);
+ok(landL.brakeW > landL.boostW, 'BRAKE is the wider pedal, the way it is in a real car');
+
+/* =================================================================== */
 console.log('\n=== steering wheel, pedals, abilities ===');
 ok(/id="wheel-zone"[\s\S]*id="wheel-rim"[\s\S]*wheel-hub/.test(htmlSrc), 'a real wheel: rim, spokes and hub');
 ok(!/joystick/.test(htmlSrc) && !/joystick/.test(src), 'the floating stick is gone');
 const abilities = (htmlSrc.match(/id="ability-row"[\s\S]*?<\/div>\s*<div id="pedal-row"/) || [''])[0];
 ok(/shoot-btn[\s\S]*skill-btn-ghost[\s\S]*skill-btn-nuke/.test(abilities), 'SHOOT, GHOST and NUKE sit above the pedals');
 ok(/id="pedal-row"[\s\S]*btn-brake[\s\S]*btn-boost/.test(htmlSrc), 'BOOST and BRAKE are side by side below them');
+ok(/\.pedal-brake\s*\{[^}]*order:\s*1/.test(cssSrc) && /\.pedal-boost\s*\{[^}]*order:\s*2/.test(cssSrc),
+   'and BRAKE is pinned to the left of BOOST, in CSS as well as in the markup');
 ok(/id="hud-left"[\s\S]*score-txt[\s\S]*speed-txt/.test(htmlSrc), 'SCORE and SPEED are top-left');
 ok(/id="hud-right"[\s\S]*timer-txt[\s\S]*nitro/.test(htmlSrc), 'TIME and NITRO are top-right');
 ok(!/hud-top/.test(htmlSrc) && !/hud-top/.test(cssSrc), 'nothing is left spanning the middle of the top edge');
