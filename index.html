@@ -41,6 +41,15 @@
             <h1>NEON DRIVE</h1>
             <div class="subtitle">MULTIPLAYER EDITION</div>
             
+            <div class="lobby-box quick-match">
+                <div class="slot-title">⚡ QUICK MATCH</div>
+                <input type="text" id="random-name" class="lobby-input" placeholder="Enter Your Name" autocomplete="off">
+                <button class="btn-main btn-random" id="btn-find-random" onclick="findRandomGame()">⚡ FIND RANDOM PLAYER</button>
+                <div id="search-status" class="search-status"></div>
+            </div>
+
+            <div class="subtitle" style="margin: 5px 0;">- OR -</div>
+
             <div class="lobby-box">
                 <div class="slot-title">CREATE A NEW RACE</div>
                 <input type="text" id="host-name" class="lobby-input" placeholder="Enter Host Name" autocomplete="off">
