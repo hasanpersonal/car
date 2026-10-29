@@ -32,10 +32,13 @@ const ROAD_SEGS = 150;              // the tarmac is a ribbon this many quads lo
  *  over distance travelled: long sweepers, real bends, and a ripple so
  *  it never reads as a plain arc. Re-seeded every race, so no two runs
  *  are alike and it never loops.
- *  Everything is drawn RELATIVE to the car — the tarmac under the car
- *  stays at x = 0 and the road bends away ahead of it — so the camera,
- *  the steering and the collision maths are untouched. The bends are a
- *  view of the road, not a change to how it is driven.
+ *  The road is its own object: it is drawn where its centreline runs,
+ *  relative to where that centreline is under the car, and nothing in it
+ *  is measured against the car. So a car that is going straight does not
+ *  stay on the road — the road curves out from under it and the driver
+ *  has to answer with the wheel. Measuring it against the car (which is
+ *  what it used to do) glued the car to the centreline, and that was the
+ *  car following the bends with nobody steering.
  * ------------------------------------------------------------------ */
 const CURVE_BANDS = [
     { wave: 2600, amp: 420 },       // long sweepers
@@ -43,6 +46,12 @@ const CURVE_BANDS = [
     { wave: 620, amp: 20 }          // ripple, so it is never a plain arc
 ];
 const CURVE = CURVE_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
+/* How hard the road is allowed to turn away from the car. The car no longer
+   follows the centreline by itself, so a bend steeper than the steering can
+   answer is a bend that simply carries you into the barrier whatever you do.
+   Whole road is scaled by this, not band by band, so a steep seed stays
+   drivable while a gentle one keeps its full sweep. */
+const MAX_ROAD_SLOPE = 0.08;
 /* bumped every time the bends are re-seeded, so anything caching a position
    on the old road knows to measure itself again */
 let CURVE_GEN = 0;
@@ -63,6 +72,8 @@ export function reseedCurves(seed) {
         CURVE[i].amp = b.amp * (0.55 + rnd() * 0.90);
         CURVE[i].phase = rnd() * Math.PI * 2;
     });
+    const slope = CURVE.reduce((t, c) => t + c.amp / c.wave, 0);
+    if (slope > MAX_ROAD_SLOPE) for (const c of CURVE) c.amp *= MAX_ROAD_SLOPE / slope;
     CURVE_GEN++;            // a new race is a new road: drop any stale cache
 }
 reseedCurves();
@@ -117,7 +128,10 @@ function makeRibbon(segments, material, normal) {
    do not start until ~87%, so the car still clears them by a wide margin. */
 export const CAM = {
     fov: 60,
-    follow: 0.65,       // how much the camera slides sideways with the car
+    follow: 1,          // how much the camera slides sideways with the car.
+                        // 1 = it sits on the car, so the car never drifts off
+                        // the centre of the screen and it is the road that
+                        // moves under you
     camY: 220,          // camera height above the road
     camZ: 330,          // camera distance behind the car
     lookY: -90,         // aim point: below road level, well up the track
@@ -655,26 +669,27 @@ export class World {
         this._centre0 = centreAt(this._s0);
         this._slope0 = slopeAt(this._s0);
     }
-    /* how far the road has swung sideways at z, as the camera sees it.
-       The car is pointing where the road points under its own wheels, so the
-       road's heading at the car has to come off first: what is left is the
-       curvature ahead of you, which is what a driver actually sees. Take a
-       constant-curvature bend and this leaves d*d/2R — the bend starts under
-       the car and opens up ahead, instead of the tarmac running away
-       sideways underneath it. That sideways run was what made the car look
-       like it was being swept the other way round the corner. */
+    /* Where the road runs, as a thing of its own: the centreline out there
+       minus the centreline under the car, and nothing else. It is NOT measured
+       against the car, so a car that is going straight does not stay on the
+       road -- the road curves away beneath it and the driver has to answer
+       with the wheel. Measuring it against the car (which is what it used to
+       do) glued the car to the centreline: that was the car following the
+       lines with nobody steering. */
     bendAt(z) {
         this._syncCurve();
-        const d = this.roadOffset + NEAR_Z - z - this._s0;   // how far up the road
-        return (centreAt(this.roadSAt(z)) - this._centre0 - d * this._slope0) /
-               Math.sqrt(1 + this._slope0 * this._slope0);
+        return centreAt(this.roadSAt(z)) - this._centre0;
     }
-    /* which way the road points at z, relative to the way you are facing.
-       Zero under your own wheels, and the whole bend beyond that. */
+    /* which way the road points at z. The camera holds its line rather than
+       swinging along the bend, so this is simply the road's own heading. */
     curveYawAt(z) {
         this._syncCurve();
-        return Math.atan(slopeAt(this.roadSAt(z))) - Math.atan(this._slope0);
+        return Math.atan(slopeAt(this.roadSAt(z)));
     }
+    /* where the centreline is under the car, in world units. script.js watches
+       this: a car going straight keeps its own line while this slides away
+       from it, and that slide is what walks you into the barrier. */
+    centreUnderCar() { this._syncCurve(); return this._centre0; }
 
     /* rebuild the tarmac, the barriers and their glow along the current bend */
     _shapeRoad() {
@@ -821,11 +836,11 @@ export class World {
         const off = Math.max(-limit, Math.min(limit, x * (1 - CAM.follow)));
         const cx = x - off;
         this.camera.position.set(cx + this.camShake.x, CAM.camY + this.camShake.y, z + CAM.camZ);
-        /* Deliberately NOT aimed down the bend: the camera holds its line so
-           the car runs straight down the middle of the screen and the road
-           snakes across it, the way an arcade racer does. Swinging the camera
-           to follow the bend made the car slide about and read as the car
-           steering itself. */
+        /* The camera sits on the car and holds its line: it is never aimed
+           down the bend and it never lags behind the car, so the car runs
+           dead centre and it is the road that snakes across the screen, the
+           way an arcade racer does. Swinging the camera to follow the bend
+           made the car slide about and read as the car steering itself. */
         this.camera.lookAt(cx, CAM.lookY, z + CAM.lookZ);
     }
 

@@ -122,6 +122,10 @@ const wheelRim = document.getElementById('wheel-rim');
    centre when you let go. WHEEL_MAX is the lock in degrees each way. */
 const WHEEL_MAX = 120;
 let wheelAngle = 0, wheelGrab = false, wheelTouchId = null;
+/* where the road's centreline sat under the car last frame; the difference
+   between then and now is how far the road has slid away from a car that is
+   holding its line. Null until the first frame of a race. */
+let roadCentre = null;
 let wheelNearHub = false, wheelStartAngle = 0, wheelStartX = 0, wheelStartWheel = 0;
 let brakeActive = false;
 const wheelSteer = () => wheelAngle / WHEEL_MAX;        // -1 (full left) .. 1 (full right)
@@ -750,8 +754,21 @@ class Player {
         let targetVX = Math.abs(wheelAngle) > 0.5 ? wheelSteer() * 10 : (keys.a ? -8 : keys.d ? 8 : 0);
         this.vx += (targetVX - this.vx) * 0.25;
         this.x += this.vx; this.angle = this.vx * 0.012;
-        if(this.x < 22) { this.x = 22; this.vx = 0; }
-        if(this.x > gameWidth - 22 - this.w) { this.x = gameWidth - 22 - this.w; this.vx = 0; }
+        /* The road is a thing of its own now, and this car is not on rails.
+           Hold the wheel straight and the road curves away from under you,
+           so you walk towards the outside of the bend instead of being
+           carried round it. Steering is what keeps you on the tarmac. */
+        if(world) {
+            const centre = world.centreUnderCar();
+            if(roadCentre !== null) this.x -= (centre - roadCentre);
+            roadCentre = centre;
+        }
+        /* The barriers are solid. The road will not steer for you, but it
+           will stop you leaving it -- at a cost, so sitting against the wall
+           is not a way to take a corner. */
+        const lo = 22, hi = gameWidth - 22 - this.w;
+        if(this.x < lo) { this.x = lo; if(this.vx < 0) this.vx = 0; this.scrape(); }
+        else if(this.x > hi) { this.x = hi; if(this.vx > 0) this.vx = 0; this.scrape(); }
 
         /* --- exhaust trail (visual only) --- */
         if(speed > 40 && Math.random() < 0.6) {
@@ -766,6 +783,17 @@ class Player {
         }
         
         this.y += ((gameHeight - 160) - this.y) * 0.05;
+    }
+    /* scraping the wall: it costs speed, it shakes the car, and it throws
+       sparks off the side that is touching */
+    scrape() {
+        speed = Math.max(speed * 0.972, 0);
+        if(world) {
+            world.addShake(Math.min(7, Math.abs(speed) * 0.02 + 1));
+            if(Math.random() < 0.5) world.spawnSplatter(
+                wx(this.x + this.w / 2) + (this.x < gameWidth / 2 ? -22 : 22),
+                wz(this.y + this.h / 2), '#ffb03a', 0.3);
+        }
     }
     draw(hidden) {
         if(!world) return;
@@ -850,6 +878,7 @@ function restartGame() {
     /* the engine was muted at the last flag — bring it back for the new race */
     if(engineGain) engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime);
     player = new Player();
+    roadCentre = null;          // new race, new bends: re-base the slide
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = START_NITRO; bullets = 0; crashStun = 0;
     reseedCurves();          // a fresh set of bends for every race
@@ -1161,9 +1190,14 @@ const flashEl = document.getElementById('flash');
 
 /* the lobby buttons are wired with onclick="" in index.html, so the handlers
    have to live on window now that this file is an ES module */
+/* how far the car is from the centreline, in world units -- negative means
+   left of the middle of the road. It is the one number that says whether you
+   are still on the road, and the dev harness steers by it. */
+const carRoadOffset = () => player ? wx(player.x + player.w / 2) : 0;
 Object.assign(window, {
     createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby,
-    useGhost, useNuke, shootBullet, findRandomGame, cancelSearch, checkOrientation
+    useGhost, useNuke, shootBullet, findRandomGame, cancelSearch, checkOrientation,
+    wheelSetAngle, carRoadOffset
 });
 
 player = new Player();
