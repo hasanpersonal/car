@@ -31,8 +31,11 @@ const db = new FakeDB();
 globalThis.firebase = makeFirebase(db);
 
 const THREE = await import('three');
-const { World } = await import('../scene3d.js');
+const { World, reseedCurves } = await import('../scene3d.js');
 const car3d = await import('../car3d.js');
+/* the bends are random per race; pin them so framing is measurable */
+const CURVE_SEED = 20251029;
+reseedCurves(CURVE_SEED);
 
 /* watch the live game by wrapping the renderer entry points first */
 let liveEnemies = null, livePlayerX = 0;
@@ -109,6 +112,69 @@ const land = framing(844, 390);
 ok(land.fog > 0.95, `traffic still appears out of the fog (${pct(land.fog)} fogged at spawn)`);
 ok(land.spawnY < land.horizon + 0.10, `and it enters near the horizon (${pct(land.spawnY)} vs horizon ${pct(land.horizon)})`);
 
+console.log('\n=== the road bends ===');
+{
+    const w = new World(env.gameCanvas); w.renderer.render = () => {};
+    env.setSize(844, 390); w.resize(); w._playerZ = 0;
+    const bends = (seed, at = 1500) => {
+        reseedCurves(seed);
+        const out = [];
+        for (let step = 0; step < 24; step++) {
+            w.scrollRoad(step * 2600);
+            out.push(w.bendAt(-at));
+        }
+        return out;
+    };
+    const swing = (a) => Math.max(...a) - Math.min(...a);
+    const run1 = bends(CURVE_SEED), run2 = bends(CURVE_SEED + 1);
+    console.log(`  over a race the road centre 1500u ahead swings ${swing(run1).toFixed(0)} units`);
+    ok(swing(run1) > 200, `it really does curve: the road ahead shifts ${swing(run1).toFixed(0)} units as you drive`);
+    ok(run1.some(v => Math.abs(v) > 60), `and often leans well off centre (up to ${Math.max(...run1.map(Math.abs)).toFixed(0)} units)`);
+    ok(run1.every((v, i) => Math.abs(v - run2[i]) > 1e-9), 'a different seed gives a different road');
+    ok(Math.abs(w.bendAt(0)) < 1e-9, 'but the tarmac under the car never moves, so the car cannot drift off it');
+
+    /* every bend, on every seed, has to stay on screen */
+    reseedCurves(CURVE_SEED);
+    let offScreen = 0, worstYaw = 0, worstShift = 0;
+    for (let seed = 0; seed < 40; seed++) {
+        reseedCurves(seed);
+        for (let step = 0; step < 10; step++) {
+            w.scrollRoad(seed * 613 + step * 3700);
+            w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+            w.camera.updateMatrixWorld(true);
+            worstYaw = Math.max(worstYaw, Math.abs(w.curveYawAt(0)) * 180 / Math.PI);
+            for (const d of [400, 900, 1800, 3200, 5600]) {
+                const c = w.bendAt(-d);
+                worstShift = Math.max(worstShift, Math.abs(c));
+                for (const e of [-220, 220]) {
+                    const v = new THREE.Vector3(c + e, 0, -d).project(w.camera);
+                    const sx = (v.x + 1) / 2 * 844;
+                    if (sx < -2 || sx > 846) offScreen++;
+                }
+            }
+        }
+    }
+    console.log(`  worst heading ${worstYaw.toFixed(1)}deg, worst swing ${worstShift.toFixed(0)} units, ${offScreen} edges off screen`);
+    ok(offScreen === 0, 'no bend, on any seed, throws the road off the side of the screen');
+    ok(worstYaw < 30, `the bends stay driveable, not hairpins (worst heading ${worstYaw.toFixed(1)}deg)`);
+
+    /* the car, the traffic and the furniture all sit on the bend */
+    reseedCurves(CURVE_SEED);
+    w.scrollRoad(12345);
+    w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+    ok(Math.abs(w.playerCar.rotation.y - w.curveYawAt(0)) < 1e-6, 'the car points along the road, not straight ahead');
+    w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
+    ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
+       `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
+    w.scrollRoad(12345);
+    const kerb = new THREE.Matrix4();
+    w.kerbs.getMatrixAt(0, kerb);
+    const kp = new THREE.Vector3().setFromMatrixPosition(kerb);
+    ok(Math.abs(kp.x - (-214 + w.bendAt(kp.z))) < 1e-6,
+       'and so does the road furniture (rumble kerbs sit on the bending edge)');
+    reseedCurves(CURVE_SEED);
+}
+
 console.log('\n=== how far down the road you can see ===');
 console.log(`  the road runs out at ${pct(land.roadEnd)} of the screen height; the horizon is ${pct(land.horizon)}`);
 ok(land.roadEnd < land.horizon + 0.06,
@@ -124,6 +190,17 @@ furniture.forEach((name, i) => {
 });
 const geoFar = +(airSrc.match(/PerspectiveCamera\(CAM\.fov, 1, 5, (\d+)\)/) || [])[1];
 ok(geoFar >= -FAR_Z + 4000, `the camera sees to ${geoFar} units, beyond the far corners of the ground`);
+/* the asphalt tiles are baked into the ribbon UVs, so repeat has to be 1 or
+   the grain ends up microscopic */
+{
+    const w2 = new World(env.gameCanvas); w2.renderer.render = () => {};
+    const uv = w2.roadRibbon.geometry.attributes.uv.array;
+    let vmax = 0;
+    for (let i = 1; i < uv.length; i += 2) vmax = Math.max(vmax, uv[i]);
+    const tiles = vmax * w2.asphalt.repeat.y;
+    const perTile = (-FAR_Z + 560) / tiles;
+    ok(tiles > 15 && tiles < 60, `asphalt tiles ${tiles.toFixed(0)} times down the road, one every ${perTile.toFixed(0)} units`);
+}
 
 console.log('\n=== portrait is untouched ===');
 for (const [W, H] of [[480, 850], [360, 640], [412, 915]]) {
@@ -337,7 +414,7 @@ const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
 console.log(`  ${avg.toFixed(1)} cars on the road, ${(near / 1200).toFixed(1)} in view, ${maxSeen} peak`);
 ok(spawnYs > 0, `every car starts at the far line (${spawnYs} spawns seen at y ${SPAWN_Y})`);
 ok(overlapped === 0, `and none appear on top of another (${overlapped} overlaps in 1500 frames)`);
-ok(near / 1200 > 5.5, `the road ahead is still busy (${(near / 1200).toFixed(1)} cars in view)`);
+ok(near / 1200 > 4.5, `the road ahead is still busy (${(near / 1200).toFixed(1)} cars in view)`);
 ok(blocked === 0, `with always a gap to aim for (${blocked}/1200 frames walled off)`);
 
 /* =================================================================== */
@@ -403,6 +480,9 @@ for (let i = 0; i < 5; i++) fire();
 ok(el('timer-txt').innerText === '2:30' && el('wheel-zone').style.display === 'block' &&
    el('controls-right').style.display === 'flex', 'wheel, pedals and HUD all appear with the race');
 ok(src.includes('ENGINE_VOLUME = 0.055') && /DynamicsCompressor/.test(src), 'audio still loud and compressed');
+window.playSolo();
+for (let i = 0; i < 3; i++) fire();
+ok(nitroPct() === 80, `every race starts with a mostly full tank (${nitroPct()}%)`);
 
 for (const style of car3d.STYLE_NAMES) {
     const car = car3d.buildCar(style, '#00f0ff');

@@ -24,6 +24,84 @@ const NEAR_Z = 560;                 // road extends this far behind the car
 const FAR_Z = -7200;                // ... and this far ahead
 const VIEW_FAR = 5800;              // fog reaches full opacity here
 const SPAN = NEAR_Z - FAR_Z;
+const ROAD_SEGS = 150;              // the tarmac is a ribbon this many quads long
+
+/* ------------------------------------------------------------------ *
+ *  ROAD SHAPE
+ *  A straight road is dull, so the centreline is a sum of three sines
+ *  over distance travelled: long sweepers, real bends, and a ripple so
+ *  it never reads as a plain arc. Re-seeded every race, so no two runs
+ *  are alike and it never loops.
+ *  Everything is drawn RELATIVE to the car — the tarmac under the car
+ *  stays at x = 0 and the road bends away ahead of it — so the camera,
+ *  the steering and the collision maths are untouched. The bends are a
+ *  view of the road, not a change to how it is driven.
+ * ------------------------------------------------------------------ */
+const CURVE_BANDS = [
+    { wave: 2600, amp: 270 },       // long sweepers
+    { wave: 1250, amp: 135 },       // the bends you actually steer for
+    { wave: 620, amp: 44 }          // ripple, so it is never a plain arc
+];
+const CURVE = CURVE_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
+function mulberry32(a) {
+    return function () {
+        a = a + 0x6D2B79F5 | 0;
+        let t = Math.imul(a ^ a >>> 15, 1 | a);
+        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    };
+}
+/* no seed (the normal case) means a fresh random set of bends; a seed makes
+   a shape reproducible, which is what the test harness needs */
+export function reseedCurves(seed) {
+    const rnd = seed === undefined ? Math.random : mulberry32(seed | 0);
+    CURVE_BANDS.forEach((b, i) => {
+        CURVE[i].wave = b.wave * (0.80 + rnd() * 0.45);
+        CURVE[i].amp = b.amp * (0.55 + rnd() * 0.90);
+        CURVE[i].phase = rnd() * Math.PI * 2;
+    });
+}
+reseedCurves();
+/* lateral offset of the road centre at absolute distance S along it */
+const centreAt = (S) =>
+    CURVE[0].amp * Math.sin(S / CURVE[0].wave + CURVE[0].phase) +
+    CURVE[1].amp * Math.sin(S / CURVE[1].wave + CURVE[1].phase) +
+    CURVE[2].amp * Math.sin(S / CURVE[2].wave + CURVE[2].phase);
+/* and its slope, which is what sets the heading of everything sitting on it */
+const slopeAt = (S) =>
+    CURVE[0].amp / CURVE[0].wave * Math.cos(S / CURVE[0].wave + CURVE[0].phase) +
+    CURVE[1].amp / CURVE[1].wave * Math.cos(S / CURVE[1].wave + CURVE[1].phase) +
+    CURVE[2].amp / CURVE[2].wave * Math.cos(S / CURVE[2].wave + CURVE[2].phase);
+
+/* A ribbon: a strip of quads running the length of the road, rebuilt every
+   frame so it can follow the bend. Used for the tarmac, the neon barriers
+   and their glow, all of which used to be one straight slab each. */
+function makeRibbon(segments, material, normal) {
+    const count = segments + 1;
+    const geo = new THREE.BufferGeometry();
+    const uv = new Float32Array(count * 2 * 2);
+    for (let i = 0; i < count; i++) {                 // v runs 0..1 along the road
+        const v = i / segments;
+        uv[i * 4 + 0] = 0; uv[i * 4 + 1] = v;
+        uv[i * 4 + 2] = 1; uv[i * 4 + 3] = v;
+    }
+    const idx = new Uint16Array(segments * 6);
+    for (let i = 0; i < segments; i++) {
+        const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+        idx.set([a, b, d, a, d, c], i * 6);
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 2 * 3), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    if (normal) {
+        const nrm = new Float32Array(count * 2 * 3);
+        for (let i = 0; i < count * 2; i++) nrm.set(normal, i * 3);
+        geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+    }
+    geo.setIndex(new THREE.BufferAttribute(idx, 1));
+    const mesh = new THREE.Mesh(geo, material);
+    mesh.frustumCulled = false;               // it always spans the whole road
+    return mesh;
+}
 
 /* Chase camera constants (tunable from the console via the exported object).
    These were solved numerically: the car's bounding
@@ -83,7 +161,13 @@ export class World {
 
         this.dummy = new THREE.Object3D();
         this.color = new THREE.Color();
+        this.roadOffset = 0;            // distance travelled, set by scrollRoad
+        this._playerZ = 0;              // where the car sits, set by setPlayer
+        /* the road's offset under the car, cached once a frame: everything
+           else is measured from it, and it is asked for hundreds of times */
+        this._centre0 = centreAt(NEAR_Z);
         this.resize();
+        this._shapeRoad();            // a sane road before the first scroll
     }
 
     /* ---------------------------------------------------------------- */
@@ -124,14 +208,23 @@ export class World {
         this.asphalt.wrapS = this.asphalt.wrapT = THREE.RepeatWrapping;
         this.asphalt.colorSpace = THREE.SRGBColorSpace;
         this.asphalt.anisotropy = 4;
-        this.asphalt.repeat.set(2, 34);      // one texture tile every ~228 units
+        /* the tiling is baked into the ribbon's UVs below, so the repeat is 1;
+           one asphalt tile lands every ~228 units, which is what the scroll
+           in scrollRoad() assumes */
+        this.asphalt.repeat.set(2, 1);
 
-        const road = new THREE.Mesh(
-            new THREE.PlaneGeometry(ROAD_W, SPAN),
-            new THREE.MeshStandardMaterial({ map: this.asphalt, roughness: 0.95, metalness: 0.05 }));
-        road.rotation.x = -Math.PI / 2;
-        road.position.z = (NEAR_Z + FAR_Z) / 2;
-        this.scene.add(road);
+        /* the tarmac is a ribbon now, so it can bend with the curve */
+        this.roadRibbon = makeRibbon(ROAD_SEGS,
+            new THREE.MeshStandardMaterial({ map: this.asphalt, roughness: 0.95, metalness: 0.05,
+                                             side: THREE.DoubleSide }), [0, 1, 0]);
+        this.scene.add(this.roadRibbon);
+        /* asphalt tiles every ~228 units down the road */
+        const ruv = this.roadRibbon.geometry.attributes.uv;
+        for (let i = 0; i <= ROAD_SEGS; i++) {
+            const v = (i / ROAD_SEGS) * (SPAN / 228);
+            ruv.array[i * 4 + 1] = v; ruv.array[i * 4 + 3] = v;
+        }
+        ruv.needsUpdate = true;
 
         /* dark ground either side so the void reads as night, not a hole */
         const ground = new THREE.Mesh(
@@ -162,24 +255,25 @@ export class World {
         this.posts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3), 3);
         this.scene.add(this.posts);
 
-        /* ---- neon barriers (static, they run the whole length) ---- */
+        /* ---- neon barriers: walls that bend with the road, and their glow ---- */
+        this.barriers = {};
+        this.halos = {};
         for (const side of [-1, 1]) {
             const col = side < 0 ? '#00f0ff' : '#ff0055';
-            const bar = new THREE.Mesh(
-                new THREE.BoxGeometry(5, 7, SPAN),
-                new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 2.4, roughness: 0.3 }));
-            bar.position.set(side * (ROAD_HALF + 2), 3.5, (NEAR_Z + FAR_Z) / 2);
+            const bar = makeRibbon(ROAD_SEGS,
+                new THREE.MeshStandardMaterial({ color: col, emissive: col, emissiveIntensity: 2.4,
+                                                 roughness: 0.3, side: THREE.DoubleSide }),
+                [side, 0, 0]);
             this.scene.add(bar);
+            this.barriers[side] = bar;
 
-            const halo = new THREE.Mesh(
-                new THREE.PlaneGeometry(70, SPAN),
+            const halo = makeRibbon(ROAD_SEGS,
                 new THREE.MeshBasicMaterial({
                     map: glowTexture(), color: col, transparent: true, opacity: 0.30,
-                    blending: THREE.AdditiveBlending, depthWrite: false
+                    blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
                 }));
-            halo.rotation.set(-Math.PI / 2, 0, 0);
-            halo.position.set(side * (ROAD_HALF + 20), 2, (NEAR_Z + FAR_Z) / 2);
             this.scene.add(halo);
+            this.halos[side] = halo;
         }
     }
 
@@ -434,9 +528,10 @@ export class World {
         const car = slot.car;
         car.visible = true;
         car.scale.setScalar(1);
-        car.position.set(x, 0, z);
-        car.rotation.set(0, 0, 0);
-        this.spawnSplatter(x, z, color, power);
+        const bx = x + this.bendAt(z);
+        car.position.set(bx, 0, z);
+        car.rotation.set(0, this.curveYawAt(z), 0);
+        this.spawnSplatter(bx, z, color, power);
     }
 
     /* the player's own impact animation */
@@ -542,8 +637,55 @@ export class World {
     /* ---------------------------------------------------------------- *
      *  per-frame sync
      * ---------------------------------------------------------------- */
+    /* ---- where the road is, relative to the car ---- */
+    roadSAt(z) { return this.roadOffset + NEAR_Z - z; }      // absolute distance at world z
+    /* how far the road has swung sideways at z, measured from under the car */
+    bendAt(z) {
+        /* re-derive the offset if the road or the car has moved since the
+           last time it was asked for, so it can never go stale */
+        if (this._c0off !== this.roadOffset || this._c0z !== this._playerZ) {
+            this._c0off = this.roadOffset; this._c0z = this._playerZ;
+            this._centre0 = centreAt(this.roadOffset + NEAR_Z - this._playerZ);
+        }
+        return centreAt(this.roadSAt(z)) - this._centre0;
+    }
+    /* heading a car sitting at z would need to point along the road */
+    curveYawAt(z) { return -Math.atan(slopeAt(this.roadSAt(z))); }
+
+    /* rebuild the tarmac, the barriers and their glow along the current bend */
+    _shapeRoad() {
+        const N = ROAD_SEGS;
+        const rp = this.roadRibbon.geometry.attributes.position.array;
+        const bl = this.barriers[-1].geometry.attributes.position.array;
+        const br = this.barriers[1].geometry.attributes.position.array;
+        const hl = this.halos[-1].geometry.attributes.position.array;
+        const hr = this.halos[1].geometry.attributes.position.array;
+        for (let i = 0; i <= N; i++) {
+            const z = NEAR_Z - (i / N) * SPAN;
+            const c = this.bendAt(z);
+            const o = i * 6;
+            rp[o] = c - ROAD_HALF;      rp[o + 1] = 0; rp[o + 2] = z;
+            rp[o + 3] = c + ROAD_HALF;  rp[o + 4] = 0; rp[o + 5] = z;
+            /* barrier walls stand on the road edge: bottom vertex, then top */
+            bl[o] = c - ROAD_HALF - 2;  bl[o + 1] = 0; bl[o + 2] = z;
+            bl[o + 3] = c - ROAD_HALF - 2; bl[o + 4] = 7; bl[o + 5] = z;
+            br[o] = c + ROAD_HALF + 2;  br[o + 1] = 0; br[o + 2] = z;
+            br[o + 3] = c + ROAD_HALF + 2; br[o + 4] = 7; br[o + 5] = z;
+            /* and the glow pooling just outside them */
+            hl[o] = c - ROAD_HALF - 15; hl[o + 1] = 2; hl[o + 2] = z;
+            hl[o + 3] = c - ROAD_HALF - 55; hl[o + 4] = 2; hl[o + 5] = z;
+            hr[o] = c + ROAD_HALF + 15; hr[o + 1] = 2; hr[o + 2] = z;
+            hr[o + 3] = c + ROAD_HALF + 55; hr[o + 4] = 2; hr[o + 5] = z;
+        }
+        for (const m of [this.roadRibbon, this.barriers[-1], this.barriers[1],
+                         this.halos[-1], this.halos[1]]) m.geometry.attributes.position.needsUpdate = true;
+    }
+
     scrollRoad(roadOffset) {
+        this.roadOffset = roadOffset;
+        this._centre0 = centreAt(roadOffset + NEAR_Z - this._playerZ);
         this.asphalt.offset.y = roadOffset / 230;
+        this._shapeRoad();
         const d = this.dummy;
         const wrap = (i, spacing, count) => {
             const total = spacing * count;
@@ -554,8 +696,9 @@ export class World {
         let n = 0;
         for (const x of [-120, 0, 120])
             for (let i = 0; i < 36; i++) {
-                d.position.set(x, 0.4, wrap(i, 165, 36));
-                d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
+                const dz = wrap(i, 165, 36);
+                d.position.set(x + this.bendAt(dz), 0.4, dz);
+                d.rotation.set(0, this.curveYawAt(dz), 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.dashes.setMatrixAt(n++, d.matrix);
             }
@@ -565,8 +708,9 @@ export class World {
         n = 0;
         for (const side of [-1, 1]) {
             for (let i = 0; i < 96; i++) {
-                d.position.set(side * (ROAD_HALF - 6), 1.2, wrap(i, 60, 96));
-                d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
+                const kz = wrap(i, 60, 96);
+                d.position.set(side * (ROAD_HALF - 6) + this.bendAt(kz), 1.2, kz);
+                d.rotation.set(0, this.curveYawAt(kz), 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.kerbs.setMatrixAt(n, d.matrix);
                 const on = (i % 2 === 0);
@@ -582,8 +726,9 @@ export class World {
         n = 0;
         for (const side of [-1, 1]) {
             for (let i = 0; i < 32; i++) {
-                d.position.set(side * (ROAD_HALF + 26), 15, wrap(i, 240, 32));
-                d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
+                const pz = wrap(i, 240, 32);
+                d.position.set(side * (ROAD_HALF + 26) + this.bendAt(pz), 15, pz);
+                d.rotation.set(0, this.curveYawAt(pz), 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.posts.setMatrixAt(n, d.matrix);
                 this.color.set(side < 0 ? '#00f0ff' : '#ff0055');
@@ -615,7 +760,9 @@ export class World {
         /* Full base pose every frame. rotation.x used to be touched only by the
            crash animation below, so every crash added its tumble to the last one
            and the car drove around permanently nose-up. */
-        car.rotation.set(0, -(opts.steer || 0) * 0.10, -(opts.steer || 0) * 0.045);
+        /* the car sits on a bend, so it points where the road points, on top
+           of however much the player is steering */
+        car.rotation.set(0, -(opts.steer || 0) * 0.10 + this.curveYawAt(z), -(opts.steer || 0) * 0.045);
         h.setBrake(opts.brake || 0);
         h.setBoost(opts.boost || 0);
         this._boost = opts.boost || 0;
@@ -649,7 +796,9 @@ export class World {
         const off = Math.max(-limit, Math.min(limit, x * (1 - CAM.follow)));
         const cx = x - off;
         this.camera.position.set(cx + this.camShake.x, CAM.camY + this.camShake.y, z + CAM.camZ);
-        this.camera.lookAt(cx, CAM.lookY, z + CAM.lookZ);
+        /* aim where the road will be, not straight ahead: on a bend the view
+           swings to keep the vanishing point in frame */
+        this.camera.lookAt(cx + this.bendAt(z + CAM.lookZ) * 0.55, CAM.lookY, z + CAM.lookZ);
     }
 
     /* ---------------------------------------------------------------- */
@@ -669,13 +818,13 @@ export class World {
             /* past the fog a car is 100% fogged, so there is nothing to draw:
                skipping it keeps 18 cars on the road cheap on a phone GPU */
             car.visible = (playerZ - e.wz) + 320 < VIEW_FAR;
-            car.position.set(e.wx, 0, e.wz);
+            car.position.set(e.wx + this.bendAt(e.wz), 0, e.wz);
             const h = car.userData.handle;
             const braking = (speed > 120 && e.wz < playerZ && playerZ - e.wz < 300) ? 1 : 0;
             h.setBrake(braking);
             h.setBoost(0);
             h.spinWheels(e.phase * 0.05, e.steer || 0);
-            car.rotation.set(0, -(e.steer || 0) * 0.16, -(e.steer || 0) * 0.03);
+            car.rotation.set(0, -(e.steer || 0) * 0.16 + this.curveYawAt(e.wz), -(e.steer || 0) * 0.03);
             car.scale.setScalar(1);
         }
         for (let i = list.length; i < this.enemyPool.length; i++) {
@@ -702,7 +851,7 @@ export class World {
                 this.scene.add(m);
             }
             m.visible = true;
-            m.position.set(list[i].wx, 12, list[i].wz);
+            m.position.set(list[i].wx + this.bendAt(list[i].wz), 12, list[i].wz);
             m.userData.halo.quaternion.copy(this.camera.quaternion);   // billboard
         }
         for (let i = list.length; i < this.bulletPool.length; i++) this.bulletPool[i].visible = false;
@@ -741,7 +890,7 @@ export class World {
             const s = list[i];
             const m = this._starMesh(i);
             m.visible = true;
-            m.position.set(s.wx, 26, s.wz);
+            m.position.set(s.wx + this.bendAt(s.wz), 26, s.wz);
             m.rotation.y = phase * 0.05 + i;
             m.rotation.z = Math.sin(phase * 0.05) * 0.2;
             m.children[0].quaternion.copy(this.camera.quaternion);   // billboard halo
@@ -756,7 +905,7 @@ export class World {
         const n = Math.min(list.length, this.maxParticles);
         for (let i = 0; i < n; i++) {
             const p = list[i];
-            pos[i * 3] = p.wx; pos[i * 3 + 1] = p.wy; pos[i * 3 + 2] = p.wz;
+            pos[i * 3] = p.wx + this.bendAt(p.wz); pos[i * 3 + 1] = p.wy; pos[i * 3 + 2] = p.wz;
             col[i * 4] = p.r; col[i * 4 + 1] = p.g; col[i * 4 + 2] = p.b; col[i * 4 + 3] = p.a;
         }
         this.particleGeo.setDrawRange(0, n);
