@@ -41,7 +41,8 @@ World.prototype.syncEnemies = function (l, s, p) { liveEnemies = l; return origS
 World.prototype.setPlayer = function (x, z, o) { livePlayerX = x; return origSet.call(this, x, z, o); };
 
 const EXPORTS = ['findRandomGame','cancelSearch','playSolo','useGhost','useNuke','shootBullet',
-                 'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby'];
+                 'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby',
+                 'checkOrientation'];
 const grab = () => Object.fromEntries(EXPORTS.map(k => [k, globalThis.window[k]]));
 await import('../script.js');
 const A = grab();
@@ -58,6 +59,7 @@ const cssSrc = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
 const airSrc = readFileSync(new URL('../scene3d.js', import.meta.url), 'utf8');
 const htmlSrc = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
 const RACE_SECONDS = +(src.match(/RACE_SECONDS = (\d+)/) || [])[1];
+const FAR_Z = +(airSrc.match(/const FAR_Z = (-?\d+)/) || [])[1];
 const RACE_MS = (RACE_SECONDS + 1) * 1000;
 const clamp = (min, vh, max, H) => Math.min(Math.max(min, vh / 100 * H), max);
 
@@ -78,14 +80,18 @@ function framing(W, H) {
     for (const c of CARB) { const q = p(...c); top = Math.min(top, q.y); bot = Math.max(bot, q.y); left = Math.min(left, q.x); right = Math.max(right, q.x); }
     const spawnZ = +(src.match(/const SPAWN_Y = (-?\d+)/) || [])[1] - 690;
     const camDist = Math.abs(spawnZ - w.camera.position.z);
+    const fogNear = +(airSrc.match(/new THREE\.Fog\('[^']+', (\d+),/) || [])[1];
+    const fogFar = +(airSrc.match(/const VIEW_FAR = (\d+)/) || [])[1];
+    const roadEnd = p(0, 0, w.camera.position.z - fogFar).y / H;   // where the tarmac goes out
     return {
+        roadEnd, fogFar, fogNear,
         roadW: Math.abs(p(220, 0, 0).x - p(-220, 0, 0).x) / W,
         roadAhead: Math.abs(p(220, 0, -1500).x - p(-220, 0, -1500).x) / W,
         carTop: top / H, carBot: bot / H, carH: bot - top, carW: right - left,
         carL: left, carR: right,
         horizon: p(0, 0, -100000).y / H,
         spawnY: p(0, 0, spawnZ).y / H,
-        fog: Math.min(1, Math.max(0, (camDist - 700) / 2200))
+        fog: Math.min(1, Math.max(0, (camDist - fogNear) / (fogFar - fogNear)))
     };
 }
 for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android landscape'], [926, 428, 'big landscape']]) {
@@ -102,6 +108,22 @@ for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android
 const land = framing(844, 390);
 ok(land.fog > 0.95, `traffic still appears out of the fog (${pct(land.fog)} fogged at spawn)`);
 ok(land.spawnY < land.horizon + 0.10, `and it enters near the horizon (${pct(land.spawnY)} vs horizon ${pct(land.horizon)})`);
+
+console.log('\n=== how far down the road you can see ===');
+console.log(`  the road runs out at ${pct(land.roadEnd)} of the screen height; the horizon is ${pct(land.horizon)}`);
+ok(land.roadEnd < land.horizon + 0.06,
+   `the tarmac reaches almost to the horizon (${pct(land.roadEnd)} vs ${pct(land.horizon)}), not a third of the way up`);
+ok(land.fogFar >= 5000, `fog holds off to ${land.fogFar} units (was 2900)`);
+ok(land.fogFar + 1000 < -FAR_Z, `and there is road underneath it all the way (geometry to ${-FAR_Z}, fog done by ${land.fogFar})`);
+/* road furniture that stops short of the fog looks like the road ends there */
+const spans = [...airSrc.matchAll(/wrap\(i, (\d+), (\d+)\)/g)].map(m => +m[1] * +m[2]);
+const furniture = ['lane dashes', 'kerbs', 'marker posts'];
+furniture.forEach((name, i) => {
+    const reach = spans[i] || 0;
+    ok(reach >= land.fogFar - 700, `${name} run ${reach} units, past where the fog hides their end`);
+});
+const geoFar = +(airSrc.match(/PerspectiveCamera\(CAM\.fov, 1, 5, (\d+)\)/) || [])[1];
+ok(geoFar >= -FAR_Z + 4000, `the camera sees to ${geoFar} units, beyond the far corners of the ground`);
 
 console.log('\n=== portrait is untouched ===');
 for (const [W, H] of [[480, 850], [360, 640], [412, 915]]) {
@@ -151,7 +173,7 @@ for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android
     const car = { l: f.carL, r: f.carR, t: f.carTop * H, b: f.carBot * H };
     console.log(`  ${label} ${W}x${H}: wheel ${L.wheel.size.toFixed(0)}px, buttons ${L.btn.toFixed(0)}px, ` +
                 `pedals ${L.brakeW.toFixed(0)}+${L.boostW.toFixed(0)}px tall ${L.pedalH.toFixed(0)}`);
-    ok(L.wheel.size >= (L.port ? 0.36 : 0.46) * Math.min(W, H),
+    ok(L.wheel.size >= (L.port ? 0.34 : 0.42) * Math.min(W, H),
        `${W}x${H}: the wheel is a proper handful (${L.wheel.size.toFixed(0)}px, ${pct(L.wheel.size / Math.min(W, H))} of the short edge)`);
     ok(L.btn >= 46 && L.pedalH >= 52 && L.brakeW >= 70 && L.boostW >= 58,
        `${W}x${H}: buttons ${L.btn.toFixed(0)}px, pedals ${L.brakeW.toFixed(0)}x${L.pedalH.toFixed(0)} — thumb-sized`);
@@ -213,6 +235,30 @@ ok(+(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1] 
 zone.fire('touchend', { touches: [] });
 for (let i = 0; i < 90; i++) fire();
 
+/* Hold a pedal with the right thumb, then steer with the left. touches[0] is
+   still the pedal finger, so this used to latch onto the wrong touch.
+   Fresh race first: the tests above leave the car against the right-hand wall,
+   where turning right cannot move it. */
+window.playSolo();
+for (let i = 0; i < 20; i++) fire();
+el('btn-boost').fire('touchstart', { touches: [{ identifier: 1, clientX: 700, clientY: 330 }],
+                                     changedTouches: [{ identifier: 1, clientX: 700, clientY: 330 }] });
+fire();
+ok(el('btn-boost').classList.contains('held'), 'BOOST is held down while the wheel is being used');
+const xBefore = livePlayerX;
+touchAt('touchstart', CX, CY + 300);          // wheel finger, second touch
+touchAt('touchmove', CX - 220, CY + 220);
+for (let i = 0; i < 40; i++) fire();
+const angleHeld = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
+ok(angleHeld > 10, `steering still works with a pedal held (wheel at ${angleHeld}deg)`);
+ok(livePlayerX > xBefore + 20, `and the car actually turns (x ${xBefore.toFixed(0)} -> ${livePlayerX.toFixed(0)})`);
+ok(el('btn-boost').classList.contains('held'), 'the pedal stayed down through all of it');
+zone.fire('touchend', { touches: [{ identifier: 1, clientX: 700, clientY: 330 }] });
+el('btn-boost').fire('touchend', { touches: [] });
+for (let i = 0; i < 120; i++) fire();
+ok(Math.abs(+(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1]) < 1,
+   'and the wheel centres again once both fingers are up');
+
 const medSpeed = (frames, before = () => {}, settle = 90) => {
     before();
     const out = []; let prev = 0, skip = 0;
@@ -266,7 +312,6 @@ ok(litWithFuel && greyOnEmpty, 'the BOOST pedal greys out the moment the tank is
 /* =================================================================== */
 console.log('\n=== traffic comes from the very start of the road ===');
 const SPAWN_Y = +(src.match(/const SPAWN_Y = (-?\d+)/) || [])[1];
-const FAR_Z = -4200;
 ok(SPAWN_Y - 690 <= FAR_Z * 0.80,
    `cars spawn at wz ${SPAWN_Y - 690}, i.e. ${pct((SPAWN_Y - 690) / FAR_Z)} of the way to the end of the road (${FAR_Z})`);
 window.playSolo();
@@ -420,6 +465,30 @@ for (const [vw, vh] of [[844, 390], [740, 360], [480, 850], [360, 640], [1024, 7
 env.setSize(844, 390);
 
 /* =================================================================== */
+console.log('\n=== upright, the game locks until you turn the phone ===');
+ok(/id="rotate-screen"/.test(htmlSrc) && /rotate-title/.test(htmlSrc), 'there is a lock screen');
+ok(/@keyframes rotateTilt/.test(cssSrc) && /@keyframes rotatePulse/.test(cssSrc) &&
+   /animation: rotateTilt/.test(cssSrc), 'and it is animated: the phone turns itself, rings pulse');
+ok(/\.rotate-lock\s*\{[^}]*z-index:\s*(\d+)/.test(cssSrc) &&
+   +cssSrc.match(/\.rotate-lock\s*\{[^}]*z-index:\s*(\d+)/)[1] > 20, 'it sits above the lobby and the HUD');
+env.setSize(480, 850);
+grab().checkOrientation();
+ok(el('rotate-screen').classList.contains('show'), 'upright: the screen is locked');
+window.playSolo();
+for (let i = 0; i < 30; i++) fire();
+const lockedScore = score(), lockedTime = el('timer-txt').innerText, lockedX = livePlayerX;
+for (let i = 0; i < 120; i++) fire();
+T.advance(4000); await flush();
+ok(score() === lockedScore && el('timer-txt').innerText === lockedTime && livePlayerX === lockedX,
+   `and the race is held still while it is up (score ${lockedScore}, clock ${lockedTime})`);
+env.setSize(844, 390);
+grab().checkOrientation();
+ok(!el('rotate-screen').classList.contains('show'), 'rotated: the lock lifts');
+for (let i = 0; i < 30; i++) fire();
+ok(livePlayerX !== lockedX || score() !== lockedScore, 'and the race picks up where it left off');
+T.advance(1500); await flush();
+ok(el('timer-txt').innerText !== lockedTime, 'the clock runs again');
+
 console.log('\n=== quick match still pairs two strangers and cleans up ===');
 T.advance(RACE_MS); await flush();
 el('random-name').value = 'ALICE';

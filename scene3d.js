@@ -16,7 +16,13 @@ import { buildCar, acquireCar, releaseCar, glowTexture, CAR } from './car3d.js';
 const ROAD_W = 440;                 // same as the 2D road (screen x 20..460)
 const ROAD_HALF = ROAD_W / 2;
 const NEAR_Z = 560;                 // road extends this far behind the car
-const FAR_Z = -4200;                // ... and this far ahead
+/* How far you can see. The road used to dissolve 2900u out, which on a
+   rotated phone is a tenth of the way down the screen — it looked like the
+   track stopped short of the horizon. The fog, the geometry and the road
+   furniture all run to ~5800u now, so the tarmac tapers almost to the
+   horizon before it goes, and traffic has somewhere to appear from. */
+const FAR_Z = -7200;                // ... and this far ahead
+const VIEW_FAR = 5800;              // fog reaches full opacity here
 const SPAN = NEAR_Z - FAR_Z;
 
 /* Chase camera constants (tunable from the console via the exported object).
@@ -66,9 +72,9 @@ export class World {
 
         this.scene = new THREE.Scene();
         this.scene.background = new THREE.Color('#04050c');
-        this.scene.fog = new THREE.Fog('#04050c', 700, 2900);
+        this.scene.fog = new THREE.Fog('#04050c', 900, VIEW_FAR);
 
-        this.camera = new THREE.PerspectiveCamera(CAM.fov, 1, 5, 6000);
+        this.camera = new THREE.PerspectiveCamera(CAM.fov, 1, 5, 12000);
         this.camShake = new THREE.Vector3();
 
         this._buildLights();
@@ -118,7 +124,7 @@ export class World {
         this.asphalt.wrapS = this.asphalt.wrapT = THREE.RepeatWrapping;
         this.asphalt.colorSpace = THREE.SRGBColorSpace;
         this.asphalt.anisotropy = 4;
-        this.asphalt.repeat.set(2, 20);
+        this.asphalt.repeat.set(2, 34);      // one texture tile every ~228 units
 
         const road = new THREE.Mesh(
             new THREE.PlaneGeometry(ROAD_W, SPAN),
@@ -129,7 +135,7 @@ export class World {
 
         /* dark ground either side so the void reads as night, not a hole */
         const ground = new THREE.Mesh(
-            new THREE.PlaneGeometry(6000, SPAN),
+            new THREE.PlaneGeometry(14000, SPAN),   // wide enough that its edge never shows
             new THREE.MeshStandardMaterial({ color: '#05060e', roughness: 1 }));
         ground.rotation.x = -Math.PI / 2;
         ground.position.set(0, -1.2, (NEAR_Z + FAR_Z) / 2);
@@ -138,22 +144,22 @@ export class World {
         /* ---- instanced, recycled road furniture ---- */
         const dashGeo = new THREE.BoxGeometry(3.5, 0.8, 42);
         this.dashes = new THREE.InstancedMesh(dashGeo,
-            new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#8899bb', emissiveIntensity: 0.25, roughness: 0.7 }), 42);
+            new THREE.MeshStandardMaterial({ color: '#ffffff', emissive: '#8899bb', emissiveIntensity: 0.25, roughness: 0.7 }), 108);
         this.dashes.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
         this.scene.add(this.dashes);
 
         const kerbGeo = new THREE.BoxGeometry(13, 2.4, 28);
         this.kerbs = new THREE.InstancedMesh(kerbGeo,
-            new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6 }), 68);
+            new THREE.MeshStandardMaterial({ color: '#ffffff', roughness: 0.6 }), 192);
         this.kerbs.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.kerbs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(68 * 3), 3);
+        this.kerbs.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(192 * 3), 3);
         this.scene.add(this.kerbs);
 
         const postGeo = new THREE.BoxGeometry(7, 30, 7);
         this.posts = new THREE.InstancedMesh(postGeo,
-            new THREE.MeshStandardMaterial({ color: '#101423', emissive: '#ffffff', emissiveIntensity: 0.35, roughness: 0.5 }), 40);
+            new THREE.MeshStandardMaterial({ color: '#101423', emissive: '#ffffff', emissiveIntensity: 0.35, roughness: 0.5 }), 64);
         this.posts.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.posts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(40 * 3), 3);
+        this.posts.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(64 * 3), 3);
         this.scene.add(this.posts);
 
         /* ---- neon barriers (static, they run the whole length) ---- */
@@ -547,8 +553,8 @@ export class World {
         /* centre + quarter lane dashes */
         let n = 0;
         for (const x of [-120, 0, 120])
-            for (let i = 0; i < 14; i++) {
-                d.position.set(x, 0.4, wrap(i, 165, 14));
+            for (let i = 0; i < 36; i++) {
+                d.position.set(x, 0.4, wrap(i, 165, 36));
                 d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.dashes.setMatrixAt(n++, d.matrix);
@@ -558,8 +564,8 @@ export class World {
         /* rumble kerbs, alternating colour */
         n = 0;
         for (const side of [-1, 1]) {
-            for (let i = 0; i < 34; i++) {
-                d.position.set(side * (ROAD_HALF - 6), 1.2, wrap(i, 60, 34));
+            for (let i = 0; i < 96; i++) {
+                d.position.set(side * (ROAD_HALF - 6), 1.2, wrap(i, 60, 96));
                 d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.kerbs.setMatrixAt(n, d.matrix);
@@ -575,8 +581,8 @@ export class World {
         /* marker posts down both shoulders */
         n = 0;
         for (const side of [-1, 1]) {
-            for (let i = 0; i < 20; i++) {
-                d.position.set(side * (ROAD_HALF + 26), 15, wrap(i, 240, 20));
+            for (let i = 0; i < 32; i++) {
+                d.position.set(side * (ROAD_HALF + 26), 15, wrap(i, 240, 32));
                 d.rotation.set(0, 0, 0); d.scale.set(1, 1, 1);
                 d.updateMatrix();
                 this.posts.setMatrixAt(n, d.matrix);
@@ -660,7 +666,9 @@ export class World {
                 slot = this.enemyPool[i] = { car, key };
             }
             const car = slot.car;
-            car.visible = true;
+            /* past the fog a car is 100% fogged, so there is nothing to draw:
+               skipping it keeps 18 cars on the road cheap on a phone GPU */
+            car.visible = (playerZ - e.wz) + 320 < VIEW_FAR;
             car.position.set(e.wx, 0, e.wz);
             const h = car.userData.handle;
             const braking = (speed > 120 && e.wz < playerZ && playerZ - e.wz < 300) ? 1 : 0;

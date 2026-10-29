@@ -35,10 +35,10 @@ const CRASH_STUN = 36;                    // ~0.6s at 60fps
 
 /* Traffic is much heavier now, so cars come from the very top of the road
    (deep in the fog) instead of blinking into existence halfway up it. */
-const MAX_ENEMIES = 11;          // a longer road needs more cars to keep it busy
-/* switched from portrait to landscape: the road runs 2200u further into the
-   fog, so launching there now drops them in visibly instead of at the far end */
-const SPAWN_Y = -3000;          // world z -3690: right up at the start of the road
+const MAX_ENEMIES = 18;          // a longer road needs more cars to keep it busy
+/* Cars and pickups launch at the far end of the road, deep in the fog, so
+   they fade in at the top of the screen instead of blinking in halfway up. */
+const SPAWN_Y = -5910;          // world z -6600: 120% fogged, past where you can see
 
 /* Don't drop a new car on top of one that is still near the spawn line. */
 function canSpawn(list) {
@@ -543,12 +543,17 @@ if (wheelZone) {
     wheelZone.addEventListener('touchstart', (e) => {
         if (!gameActive) return;
         e.preventDefault(); e.stopPropagation();
-        if (e.touches.length) wheelGrabAt(e.touches[0]);
+        /* changedTouches, NOT touches: with a thumb already down on a pedal,
+           touches[0] is that pedal finger, so the wheel used to latch onto
+           the wrong touch and then ignore the one actually turning it. */
+        const started = (e.changedTouches && e.changedTouches.length) ? e.changedTouches : e.touches;
+        if (started && started.length) wheelGrabAt(started[started.length - 1]);
     }, { passive: false });
 
     wheelZone.addEventListener('touchmove', (e) => {
         if (!wheelGrab) return;
-        for (const t of e.touches) {
+        const moved = (e.changedTouches && e.changedTouches.length) ? e.changedTouches : e.touches;
+        for (const t of moved) {
             if (t.identifier !== wheelTouchId) continue;
             const c = wheelCentre();
             let delta;
@@ -567,7 +572,8 @@ if (wheelZone) {
     const wheelRelease = (e) => {
         if (!wheelGrab) return;
         let still = false;
-        for (const t of e.touches) if (t.identifier === wheelTouchId) still = true;
+        const left = (e && e.touches) || [];
+        for (const t of left) if (t.identifier === wheelTouchId) still = true;
         if (!still) { wheelGrab = false; wheelTouchId = null; }
     };
     wheelZone.addEventListener('touchend', wheelRelease);
@@ -584,6 +590,20 @@ if (wheelZone) {
     });
     window.addEventListener('mouseup', () => { wheelGrab = false; wheelTouchId = null; });
 }
+
+/* ---- landscape only: upright there is no road to look down ---- */
+const rotateScreen = document.getElementById('rotate-screen');
+let orientationLocked = false;
+function checkOrientation() {
+    const w = window.innerWidth, h = window.innerHeight;
+    const locked = h > w * 1.05;            // upright, or so square it may as well be
+    if (locked === orientationLocked) return;
+    orientationLocked = locked;
+    if (rotateScreen) rotateScreen.classList.toggle('show', locked);
+}
+window.addEventListener('resize', checkOrientation);
+window.addEventListener('orientationchange', () => { setTimeout(checkOrientation, 250); });
+checkOrientation();
 
 const keys = { a: false, d: false, w: false, s: false };
 window.addEventListener('keydown', e => {
@@ -814,7 +834,7 @@ function restartGame() {
 
     if(timerInterval) clearInterval(timerInterval);
     timerInterval = setInterval(() => {
-        if(gameActive) {
+        if(gameActive && !orientationLocked) {
             raceTimeLeft--;
             document.getElementById('timer-txt').innerText = fmtTime(raceTimeLeft);
             if(raceTimeLeft <= 0) {
@@ -959,6 +979,8 @@ function syncOpponents() {
 }
 
 function render() {
+    /* locked upright: hold the race exactly where it is until they turn round */
+    if (orientationLocked) { requestAnimationFrame(render); return; }
     if(screenShake > 0) { screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0; }
 
     /* the steering wheel self-centres the moment you let go of it */
@@ -1039,7 +1061,9 @@ function render() {
     }
     if(world) world.syncParticles(particles);
 
-    if(gameActive && Math.random() < 0.015 && stars.length < 2) stars.push(new Star());   // stars share the far spawn
+    /* stars share the far spawn, so a longer road means each one takes far longer
+       to arrive: three in flight keeps a pickup reaching you every ~5 s */
+    if(gameActive && Math.random() < 0.022 && stars.length < 3) stars.push(new Star());
     for(let i = stars.length - 1; i >= 0; i--) {
         stars[i].update();
         if(gameActive && player && Math.abs(player.x + player.w/2 - stars[i].x) < player.w/2 + stars[i].r && Math.abs(player.y + player.h/2 - stars[i].y) < player.h/2 + stars[i].r) {
@@ -1098,7 +1122,7 @@ const flashEl = document.getElementById('flash');
    have to live on window now that this file is an ES module */
 Object.assign(window, {
     createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby,
-    useGhost, useNuke, shootBullet, findRandomGame, cancelSearch
+    useGhost, useNuke, shootBullet, findRandomGame, cancelSearch, checkOrientation
 });
 
 player = new Player();
