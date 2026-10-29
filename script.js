@@ -99,10 +99,19 @@ canvas.addEventListener('webglcontextrestored', () => { if (world) world.resize(
 window.addEventListener('orientationchange', () => setTimeout(() => world && world.resize(), 250));
 
 const hud = document.getElementById('hud');
-const btnLeft = document.getElementById('shoot-btn-left');
-const btnRight = document.getElementById('shoot-btn-right');
-const btnSkillLeft = document.getElementById('skill-btn-left');
-const btnSkillRight = document.getElementById('skill-btn-right');
+const ctrlLeft = document.getElementById('controls-left');
+const btnShoot = document.getElementById('shoot-btn');
+const btnBoost = document.getElementById('btn-boost');
+const btnBrake = document.getElementById('btn-brake');
+const btnSkillGhost = document.getElementById('skill-btn-ghost');
+const btnSkillNuke = document.getElementById('skill-btn-nuke');
+const boostSub = btnBoost ? btnBoost.querySelector('.btn-sub') : null;
+/* held by the BOOST / BRAKE buttons until you let go */
+let boostHeld = false, brakeHeld = false;
+/* the stick steers; you only get nitro/brake by shoving it well past that */
+const JOY_HOLD_DY = 34;              // out of a 55px range
+const joyWantsNitro = () => joyActive && joyDY < -JOY_HOLD_DY && Math.abs(joyDY) > Math.abs(joyDX);
+const joyWantsBrake = () => joyActive && joyDY > JOY_HOLD_DY && Math.abs(joyDY) > Math.abs(joyDX);
 const joyContainer = document.getElementById('joystick-container');
 const joyKnob = document.getElementById('joystick-knob');
 
@@ -507,7 +516,7 @@ function playSfx(freq, type, dur, vol) {
 const gameContainer = document.getElementById('game-container');
 gameContainer.addEventListener('touchstart', (e) => {
     if (!gameActive) return;
-    if (e.target.closest('.shoot-btn') || e.target.closest('.skill-btn') || e.target.closest('.overlay')) return;
+    if (e.target.closest('.ctrl-btn') || e.target.closest('.overlay')) return;
 
 
     const rect = gameContainer.getBoundingClientRect();
@@ -568,10 +577,24 @@ function bindButton(el, fn) {
     el.addEventListener('touchstart', run, { passive: false });
     el.addEventListener('mousedown', run);
 }
-bindButton(btnLeft, shootBullet);
-bindButton(btnRight, shootBullet);
-bindButton(btnSkillLeft, useGhost);
-bindButton(btnSkillRight, useNuke);
+/* BOOST and BRAKE are hold-to-use: press down, keep, let go */
+function bindHold(el, down, up) {
+    if (!el) return;
+    const on = (e) => { down(); e.preventDefault(); e.stopPropagation(); };
+    const off = (e) => { up(); if (e) { e.preventDefault(); e.stopPropagation(); } };
+    el.addEventListener('touchstart', on, { passive: false });
+    el.addEventListener('touchend', off);
+    el.addEventListener('touchcancel', off);
+    el.addEventListener('mousedown', on);
+    window.addEventListener('mouseup', off);
+    window.addEventListener('blur', off);
+}
+bindButton(btnShoot, shootBullet);
+bindButton(btnSkillGhost, useGhost);
+bindButton(btnSkillNuke, useNuke);
+bindHold(btnBoost, () => { boostHeld = true; }, () => { boostHeld = false; });
+bindHold(btnBrake, () => { brakeHeld = true; btnBrake.classList.add('held'); },
+                   () => { brakeHeld = false; if (btnBrake) btnBrake.classList.remove('held'); });
 
 function shootBullet() {
     if(!gameActive || bullets <= 0) return;
@@ -591,15 +614,15 @@ function updateAmmoUI() {
 function updateSkillUI() {
     const afford = bullets >= SKILL_COST && gameActive;
     const nukeReady = afford && enemies.length > 0;
-    if (btnSkillLeft) {
-        btnSkillLeft.classList.toggle('empty', !(afford && !ghostActive));
-        btnSkillLeft.classList.toggle('ghosting', ghostActive);
-        const sub = btnSkillLeft.querySelector('.skill-sub');
+    if (btnSkillGhost) {
+        btnSkillGhost.classList.toggle('empty', !(afford && !ghostActive));
+        btnSkillGhost.classList.toggle('ghosting', ghostActive);
+        const sub = btnSkillGhost.querySelector('.btn-sub');
         if (sub) sub.innerText = ghostActive ? `${Math.ceil(ghostTimer / 60)}s` : `${SKILL_COST} AMMO`;
     }
-    if (btnSkillRight) {
-        btnSkillRight.classList.toggle('empty', !nukeReady);
-        const subR = btnSkillRight.querySelector('.skill-sub');
+    if (btnSkillNuke) {
+        btnSkillNuke.classList.toggle('empty', !nukeReady);
+        const subR = btnSkillNuke.querySelector('.btn-sub');
         if (subR) subR.innerText = nukeReady ? `${SKILL_COST} AMMO` : (afford ? 'NO CARS' : `${SKILL_COST} AMMO`);
     }
 }
@@ -803,17 +826,16 @@ function endRaceDuration() {
 /* every on-screen control, so nothing is left live behind an overlay */
 function hideControls() {
     hud.style.display = 'none';
-    btnLeft.style.display = 'none';
-    btnRight.style.display = 'none';
-    if(btnSkillLeft) btnSkillLeft.style.display = 'none';
-    if(btnSkillRight) btnSkillRight.style.display = 'none';
+    if(ctrlLeft) ctrlLeft.style.display = 'none';
+    /* a held button or a live stick must never be left on behind an overlay */
+    boostHeld = false; brakeHeld = false;
+    if(btnBrake) btnBrake.classList.remove('held');
+    joyActive = false; joyTouchId = null; joyDX = 0; joyDY = 0;
+    if(joyContainer) joyContainer.style.display = 'none';
 }
 function showControls() {
     hud.style.display = 'block';
-    btnLeft.style.display = 'flex';
-    btnRight.style.display = 'flex';
-    if(btnSkillLeft) btnSkillLeft.style.display = 'flex';
-    if(btnSkillRight) btnSkillRight.style.display = 'flex';
+    if(ctrlLeft) ctrlLeft.style.display = 'flex';
 }
 
 // --- NEW FUNCTION: BACK TO LOBBY (WITHOUT DISCONNECTING) ---
@@ -908,8 +930,10 @@ function render() {
     if(screenShake > 0) { screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0; }
 
     if(gameActive) {
-        let nitroReq = (joyActive && joyDY < -14) || keys.w;
-        let brakeReq = (joyActive && joyDY > 14) || keys.s; 
+        /* steering is the stick's whole job; nitro and brake only kick in
+           when you drag it well past that, or you hold the new buttons */
+        let nitroReq = joyWantsNitro() || keys.w || boostHeld;
+        let brakeReq = joyWantsBrake() || keys.s || brakeHeld; 
         isNitro = nitroReq && nitro > 0;
         brakeActive = brakeReq;
         
@@ -931,6 +955,10 @@ function render() {
         document.getElementById('speed-txt').innerText = `${Math.floor(speed)} KMH`;
         document.getElementById('nitro-bar-fill').style.width = `${nitro}%`;
         document.getElementById('nitro-percent-txt').innerText = `${Math.floor(nitro)}%`;
+        /* the BOOST button mirrors the gauge and greys out when it is empty */
+        const nitroTxt = `${Math.floor(nitro)}%`;
+        if(boostSub && boostSub.innerText !== nitroTxt) boostSub.innerText = nitroTxt;
+        if(btnBoost) btnBoost.classList.toggle('empty', nitro <= 0);
 
         if(isMultiplayer && Date.now() - lastSyncTime > 100) {
             database.ref('car_rooms/' + currentRoom + '/players/' + myId).update({

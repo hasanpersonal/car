@@ -31,10 +31,15 @@
                 <div id="nitro-percent-txt" class="nitro-percent">0%</div>
             </div>
         </div>
-        <div id="shoot-btn-left" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
-        <div id="shoot-btn-right" class="shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
-        <div id="skill-btn-left" class="skill-btn empty"><div class="skill-title">GHOST</div><div class="skill-sub">5 AMMO</div></div>
-        <div id="skill-btn-right" class="skill-btn empty nuke"><div class="skill-title">NUKE</div><div class="skill-sub">5 AMMO</div></div>
+        <!-- One column on the left: BOOST, BRAKE, SHOOT, GHOST, NUKE top to
+             bottom. The steering stick floats to wherever you first touch. -->
+        <div id="controls-left">
+            <div id="btn-boost" class="ctrl-btn boost empty"><div class="btn-title">BOOST</div><div class="btn-sub">0%</div></div>
+            <div id="btn-brake" class="ctrl-btn brake"><div class="btn-title">BRAKE</div><div class="btn-sub">HOLD</div></div>
+            <div id="shoot-btn" class="ctrl-btn shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
+            <div id="skill-btn-ghost" class="ctrl-btn skill-btn empty"><div class="btn-title">GHOST</div><div class="btn-sub">5 AMMO</div></div>
+            <div id="skill-btn-nuke" class="ctrl-btn skill-btn nuke empty"><div class="btn-title">NUKE</div><div class="btn-sub">5 AMMO</div></div>
+        </div>
         <div id="joystick-container"><div id="joystick-knob"></div></div>
 
         <div id="start-screen" class="overlay">
