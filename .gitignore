@@ -1,4 +1,6 @@
 
-# dev-only test harness (node + stubbed DOM/WebGL). Not part of the site.
-tests/
+# dependencies (the test harness reinstalls these)
 node_modules/
+
+# the symlink run.sh creates so scene3d.js can resolve bare "three" imports
+/node_modules

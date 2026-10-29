@@ -1,0 +1,396 @@
+/* NEON DRIVE full suite. Runs the REAL modules against a stubbed DOM/WebGL,
+   an in-memory Firebase and a virtual clock, so every frame is deterministic.
+   Usage: cd tests && ./run.sh     (npm install three @napi-rs/canvas first) */
+import { makeEnv, makeAudio } from './glstub.mjs';
+import { FakeDB, makeFirebase } from './fakedb.mjs';
+import { readFileSync } from 'node:fs';
+
+let fail = 0;
+const ok = (c, m) => { console.log((c ? '  PASS ' : '  FAIL ') + m); if (!c) fail++; };
+const pct = (v) => (v * 100).toFixed(0) + '%';
+
+const env = makeEnv(844, 390);                 // the game is played rotated
+globalThis.document = env.doc; globalThis.window = env.win; globalThis.self = env.win;
+Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'node', maxTouchPoints: 5 }, configurable: true });
+globalThis.alert = (m) => { console.log('   [alert] ' + m); };
+const T = env.timers;
+globalThis.setTimeout = (fn, ms) => T.setTimeout(fn, ms);
+globalThis.setInterval = (fn, ms) => T.setInterval(fn, ms);
+globalThis.clearTimeout = (id) => T.clear(id);
+globalThis.clearInterval = (id) => T.clear(id);
+
+let rafCb = null;
+const raf = (cb) => { rafCb = cb; return 1; };
+env.win.requestAnimationFrame = raf; globalThis.requestAnimationFrame = raf;
+globalThis.cancelAnimationFrame = () => { rafCb = null; };
+
+const audio = makeAudio();
+globalThis.AudioContext = env.win.AudioContext = audio.Ctx;
+
+const db = new FakeDB();
+globalThis.firebase = makeFirebase(db);
+
+const THREE = await import('three');
+const { World } = await import('../scene3d.js');
+const car3d = await import('../car3d.js');
+
+/* watch the live game by wrapping the renderer entry points first */
+let liveEnemies = null, livePlayerX = 0;
+const origSync = World.prototype.syncEnemies, origSet = World.prototype.setPlayer;
+World.prototype.syncEnemies = function (l, s, p) { liveEnemies = l; return origSync.call(this, l, s, p); };
+World.prototype.setPlayer = function (x, z, o) { livePlayerX = x; return origSet.call(this, x, z, o); };
+
+const EXPORTS = ['findRandomGame','cancelSearch','playSolo','useGhost','useNuke','shootBullet',
+                 'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby'];
+const grab = () => Object.fromEntries(EXPORTS.map(k => [k, globalThis.window[k]]));
+await import('../script.js');
+const A = grab();
+
+const fire = () => { const cb = rafCb; rafCb = null; if (cb) cb(0); };
+const el = (id) => document.getElementById(id);
+const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
+const ammo = () => parseInt(document.querySelectorAll('.ammo-count')[0].innerText) || 0;
+const score = () => parseInt(el('score-txt').innerText) || 0;
+const speed = () => parseInt(el('speed-txt').innerText) || 0;
+const nitroPct = () => parseInt(el('nitro-percent-txt').innerText) || 0;
+const src = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
+const cssSrc = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
+const airSrc = readFileSync(new URL('../scene3d.js', import.meta.url), 'utf8');
+const htmlSrc = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
+const RACE_SECONDS = +(src.match(/RACE_SECONDS = (\d+)/) || [])[1];
+const RACE_MS = (RACE_SECONDS + 1) * 1000;
+const clamp = (min, vh, max, H) => Math.min(Math.max(min, vh / 100 * H), max);
+
+/* =================================================================== */
+console.log('=== ROTATED (landscape): the road keeps its width, the car sits low ===');
+const CARB = [[-22, 0, -42.5], [22, 0, -42.5], [-22, 21, 41], [22, 21, 41], [0, 21, -42.5]];
+function framing(W, H) {
+    env.setSize(W, H);
+    const w = new World(env.gameCanvas); w.renderer.render = () => {};
+    w.resize();
+    w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+    w.camera.updateMatrixWorld(true);
+    const p = (x, y, z) => {
+        const v = new THREE.Vector3(x, y, z).project(w.camera);
+        return { x: (v.x + 1) / 2 * W, y: (1 - v.y) / 2 * H };
+    };
+    let top = 1e9, bot = -1e9, left = 1e9, right = -1e9;
+    for (const c of CARB) { const q = p(...c); top = Math.min(top, q.y); bot = Math.max(bot, q.y); left = Math.min(left, q.x); right = Math.max(right, q.x); }
+    const spawnZ = +(src.match(/const SPAWN_Y = (-?\d+)/) || [])[1] - 690;
+    const camDist = Math.abs(spawnZ - w.camera.position.z);
+    return {
+        roadW: Math.abs(p(220, 0, 0).x - p(-220, 0, 0).x) / W,
+        roadAhead: Math.abs(p(220, 0, -1500).x - p(-220, 0, -1500).x) / W,
+        carTop: top / H, carBot: bot / H, carH: bot - top, carW: right - left,
+        horizon: p(0, 0, -100000).y / H,
+        spawnY: p(0, 0, spawnZ).y / H,
+        fog: Math.min(1, Math.max(0, (camDist - 700) / 2200))
+    };
+}
+for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android landscape'], [926, 428, 'big landscape']]) {
+    const m = framing(W, H);
+    console.log(`  ${label} ${W}x${H}: road ${pct(m.roadW)} wide, car ${m.carW.toFixed(0)}x${m.carH.toFixed(0)}px ` +
+                `at ${pct(m.carTop)}-${pct(m.carBot)}, horizon ${pct(m.horizon)}`);
+    ok(m.roadW > 0.75, `${W}x${H}: road still fills the width (${pct(m.roadW)}, was 45% before)`);
+    ok(m.roadAhead > 0.14, `${W}x${H}: and stays wide up the track (${pct(m.roadAhead)} at 1500u)`);
+    ok(m.carBot > 0.70, `${W}x${H}: car sits low where a rotated phone has room (bottom ${pct(m.carBot)}, was 65%)`);
+    ok(m.carTop > 0.55, `${W}x${H}: with the whole road ahead visible above it (top ${pct(m.carTop)})`);
+    ok(m.horizon > 0.02 && m.horizon < 0.25, `${W}x${H}: horizon stays in frame (${pct(m.horizon)})`);
+    ok(m.carH > 40 && m.carH < 130, `${W}x${H}: car is ${m.carH.toFixed(0)}px tall — readable, not a toy`);
+}
+const land = framing(844, 390);
+ok(land.fog > 0.95, `traffic still appears out of the fog (${pct(land.fog)} fogged at spawn)`);
+ok(land.spawnY < land.horizon + 0.10, `and it enters near the horizon (${pct(land.spawnY)} vs horizon ${pct(land.horizon)})`);
+
+console.log('\n=== portrait is untouched ===');
+for (const [W, H] of [[480, 850], [360, 640], [412, 915]]) {
+    const m = framing(W, H);
+    ok(m.roadW > 1.2 && m.carTop > 0.50 && m.carTop < 0.62 && Math.abs(m.horizon - 0.10) < 0.03,
+       `${W}x${H}: same framing as before (road ${pct(m.roadW)}, car ${pct(m.carTop)}-${pct(m.carBot)}, horizon ${pct(m.horizon)})`);
+}
+ok(/@media \(orientation: landscape\)[\s\S]*max-width: none/.test(cssSrc),
+   'landscape drops the portrait letterboxing so the road runs screen-wide');
+
+/* =================================================================== */
+console.log('\n=== steering wheel, pedals, abilities ===');
+ok(/id="wheel-zone"[\s\S]*id="wheel-rim"[\s\S]*wheel-hub/.test(htmlSrc), 'a real wheel: rim, spokes and hub');
+ok(!/joystick/.test(htmlSrc) && !/joystick/.test(src), 'the floating stick is gone');
+const abilities = (htmlSrc.match(/id="ability-row"[\s\S]*?<\/div>\s*<div id="pedal-row"/) || [''])[0];
+ok(/shoot-btn[\s\S]*skill-btn-ghost[\s\S]*skill-btn-nuke/.test(abilities), 'SHOOT, GHOST and NUKE sit above the pedals');
+ok(/id="pedal-row"[\s\S]*btn-brake[\s\S]*btn-boost/.test(htmlSrc), 'BOOST and BRAKE are side by side below them');
+ok(/id="hud-left"[\s\S]*score-txt[\s\S]*speed-txt/.test(htmlSrc), 'SCORE and SPEED are top-left');
+ok(/id="hud-right"[\s\S]*timer-txt[\s\S]*nitro/.test(htmlSrc), 'TIME and NITRO are top-right');
+ok(!/hud-top/.test(htmlSrc) && !/hud-top/.test(cssSrc), 'nothing is left spanning the middle of the top edge');
+
+window.playSolo();
+for (let i = 0; i < 60; i++) fire();
+/* the stub puts every element at the screen rect, so the wheel centre is the
+   middle of the screen: aim the grabs at that */
+const zone = el('wheel-zone');
+const touchAt = (type, x, y) => zone.fire(type, { touches: [{ identifier: 5, clientX: x, clientY: y }] });
+const CX = 422, CY = 195, R = 422;
+/* Grabbing the bottom of the rim and pushing LEFT is how you turn a real
+   wheel right — the wheel follows your hand, it does not mirror it. */
+touchAt('touchstart', CX, CY + 300);
+fire();
+ok(/rotate\(/.test(el('wheel-rim').style.transform || ''), `the wheel is live (${el('wheel-rim').style.transform})`);
+touchAt('touchmove', CX - 220, CY + 220);
+for (let i = 0; i < 40; i++) fire();
+const angleRight = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
+const xRight = livePlayerX;
+ok(angleRight > 10, `turning the rim right rotates the wheel clockwise (+${angleRight}deg)`);
+ok(xRight > 20, `and the car follows (x ${xRight.toFixed(0)})`);
+/* and the other way */
+touchAt('touchmove', CX + 220, CY + 220);
+for (let i = 0; i < 60; i++) fire();
+const angleLeft = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
+ok(angleLeft < -10 && livePlayerX < -20, `and left steers left (${angleLeft}deg, x ${livePlayerX.toFixed(0)})`);
+/* let go: it springs back to centre */
+zone.fire('touchend', { touches: [] });
+for (let i = 0; i < 90; i++) fire();
+const restAngle = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
+ok(Math.abs(restAngle) < 1, `it springs back to centre when released (${restAngle}deg)`);
+/* near the hub it steers by drag instead of angle */
+touchAt('touchstart', CX, CY);
+touchAt('touchmove', CX + 60, CY);
+for (let i = 0; i < 30; i++) fire();
+ok(+(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1] > 30,
+   'and dragging near the hub works too');
+zone.fire('touchend', { touches: [] });
+for (let i = 0; i < 90; i++) fire();
+
+const medSpeed = (frames, before = () => {}, settle = 90) => {
+    before();
+    const out = []; let prev = 0, skip = 0;
+    for (let i = 0; i < frames; i++) {
+        fire();
+        const sp = speed();
+        if (sp < prev - 40) skip = 140;                     // ignore the frames after a crash
+        prev = sp;
+        if (skip > 0) { skip--; continue; }
+        if (i > settle) out.push(sp);
+    }
+    out.sort((a, b) => a - b);
+    return out.length ? out[out.length >> 1] : 0;
+};
+const farmNitro = (target = 60) => { let n = 0; while (nitroPct() < target && n++ < 20000) fire(); };
+const ghosted = (frames, before = () => {}, settle = 60) => {
+    let k = 0; while (ammo() < 10 && k++ < 20000) fire();
+    window.useGhost();
+    return medSpeed(frames, before, settle);
+};
+const cruise = medSpeed(300);
+let bk = 0; while (ammo() < 10 && bk++ < 20000) fire();
+farmNitro(60);
+window.useGhost();
+const boosted = medSpeed(170, () => el('btn-boost').fire('touchstart', {}), 60);
+el('btn-boost').fire('touchend', {});
+ok(el('btn-boost').classList.contains('held') === false, 'BOOST releases cleanly');
+const released = ghosted(150);
+const braked = medSpeed(300, () => el('btn-brake').fire('touchstart', {}));
+ok(el('btn-brake').classList.contains('held'), 'BRAKE shows pressed while held');
+el('btn-brake').fire('touchend', {});
+for (let i = 0; i < 60; i++) fire();
+ok(!el('btn-brake').classList.contains('held'), 'and pops back up');
+console.log(`  cruise ${cruise} | BOOST pedal ${boosted} | BRAKE pedal ${braked}`);
+ok(cruise >= 150 && cruise <= 170, `cruise is still 160 (${cruise})`);
+ok(boosted > 300, `the BOOST pedal hits nitro (${boosted} KMH)`);
+ok(released < boosted - 100, `and it drops back on release (${released} KMH)`);
+ok(braked >= 55 && braked <= 66, `the BRAKE pedal settles at brake speed (${braked} KMH)`);
+/* pedals grey out when there is nothing to give */
+el('btn-boost').fire('touchstart', {});
+let litWithFuel = false, greyOnEmpty = false, d = 0;
+while (d++ < 6000 && !(litWithFuel && greyOnEmpty)) {
+    fire();
+    const p = nitroPct(), empty = el('btn-boost').classList.contains('empty');
+    if (p > 0 && !empty) litWithFuel = true;
+    if (p <= 0 && empty) greyOnEmpty = true;
+}
+el('btn-boost').fire('touchend', {});
+ok(litWithFuel && greyOnEmpty, 'the BOOST pedal greys out the moment the tank is dry');
+
+/* =================================================================== */
+console.log('\n=== traffic comes from the very start of the road ===');
+const SPAWN_Y = +(src.match(/const SPAWN_Y = (-?\d+)/) || [])[1];
+const FAR_Z = -4200;
+ok(SPAWN_Y - 690 <= FAR_Z * 0.80,
+   `cars spawn at wz ${SPAWN_Y - 690}, i.e. ${pct((SPAWN_Y - 690) / FAR_Z)} of the way to the end of the road (${FAR_Z})`);
+window.playSolo();
+for (let i = 0; i < 60; i++) fire();
+let counts = [], maxSeen = 0, overlapped = 0, near = 0, blocked = 0, spawnYs = 0;
+for (let i = 0; i < 1500; i++) {
+    fire();
+    const list = liveEnemies || [];
+    counts.push(list.length);
+    maxSeen = Math.max(maxSeen, list.length);
+    for (const e of list) {
+        if (Math.abs(e.y - SPAWN_Y) < 2) spawnYs++;
+        for (const o of list) if (o !== e && Math.abs(o.y - e.y) < 60 && Math.abs(o.x - e.x) < 40) overlapped++;
+    }
+    if (i < 1200) {
+        const n = list.filter(e => e.y - 690 > -2200 && e.y - 690 < 200);
+        near += n.length;
+        if (n.length >= 3 && [-110, -37, 37, 110].every(lx => n.some(e => Math.abs(e.x - lx) < 40 &&
+            n.some(o => Math.abs(o.x - lx) < 40 && Math.abs(o.y - e.y) < 200)))) blocked++;
+    }
+}
+const avg = counts.reduce((a, b) => a + b, 0) / counts.length;
+console.log(`  ${avg.toFixed(1)} cars on the road, ${(near / 1200).toFixed(1)} in view, ${maxSeen} peak`);
+ok(spawnYs > 0, `every car starts at the far line (${spawnYs} spawns seen at y ${SPAWN_Y})`);
+ok(overlapped === 0, `and none appear on top of another (${overlapped} overlaps in 1500 frames)`);
+ok(near / 1200 > 5.5, `the road ahead is still busy (${(near / 1200).toFixed(1)} cars in view)`);
+ok(blocked === 0, `with always a gap to aim for (${blocked}/1200 frames walled off)`);
+
+/* =================================================================== */
+console.log('\n=== buttons only light when they can be used ===');
+const rules = [];
+const cssFlat = cssSrc.replace(/\/\*[\s\S]*?\*\//g, '').replace(/@media[^{]*\{[\s\S]*?\n\}/g, '').replace(/@keyframes[\s\S]*?\n\}/g, '');
+for (const m of cssFlat.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+    for (const sel of m[1].split(',')) {
+        const t = sel.trim();
+        if (!t || /[\s>:*\[]/.test(t)) continue;
+        rules.push({ ids: (t.match(/#[\w-]+/g) || []).map(x => x.slice(1)),
+                     cls: (t.match(/\.[\w-]+/g) || []).map(x => x.slice(1)), decls: m[2] });
+    }
+}
+const resolve = (id, classes, prop) => {
+    let best = null, bs = null;
+    rules.forEach((r, i) => {
+        if (r.ids.length && r.ids[0] !== id) return;
+        if (!r.cls.every(c => classes.includes(c))) return;
+        const d = r.decls.split(';').map(x => x.trim()).find(x => x.startsWith(prop + ':'));
+        if (!d) return;
+        const s = [r.ids.length, r.cls.length, i];
+        if (!bs || s[0] > bs[0] || (s[0] === bs[0] && (s[1] > bs[1] || (s[1] === bs[1] && s[2] > bs[2])))) {
+            best = d.slice(prop.length + 1).trim(); bs = s;
+        }
+    });
+    return best;
+};
+for (const [id, cls, label] of [['skill-btn-nuke', ['ctrl-btn','skill-btn','nuke'], 'NUKE'],
+                                ['skill-btn-ghost', ['ctrl-btn','skill-btn'], 'GHOST'],
+                                ['shoot-btn', ['ctrl-btn','shoot-btn'], 'SHOOT']]) {
+    ok(resolve(id, cls, 'background') !== 'none' && /gradient|radial/.test(resolve(id, cls, 'background') || ''), `${label} lit when ready`);
+    ok(/30, 30, 40/.test(resolve(id, cls.concat('empty'), 'background') || ''), `and ${label} greys out`);
+}
+ok(/30, 30, 40/.test(resolve('btn-boost', ['pedal','pedal-boost','empty'], 'background') || '') === false ||
+   /30, 30, 40/.test(resolve('btn-boost', ['pedal','empty'], 'background') || ''), 'the BOOST pedal greys out too');
+window.playSolo();
+let nk = 0; while (ammo() < 10 && nk++ < 20000) fire();
+let litNoCars = 0, litNoAmmo = 0;
+for (let i = 0; i < 600; i++) {
+    fire();
+    const lit = !el('skill-btn-nuke').classList.contains('empty');
+    if (lit && (liveEnemies || []).length === 0) litNoCars++;
+    if (lit && ammo() < 5) litNoAmmo++;
+}
+ok(litNoCars === 0 && litNoAmmo === 0, `NUKE never lit when it cannot fire (${litNoCars}/${litNoAmmo})`);
+const carsBefore = (liveEnemies || []).length;
+const litBefore = !el('skill-btn-nuke').classList.contains('empty');
+window.useNuke();
+ok(litBefore && carsBefore > 0 && el('skill-btn-nuke').classList.contains('empty'),
+   'and it goes dark the instant the road is clear');
+
+/* =================================================================== */
+console.log('\n=== the rest of the game still works ===');
+const airN = +(airSrc.match(/_buildAirStreaks\(\) \{[\s\S]*?const N = (\d+)/) || [])[1];
+const airX = airSrc.match(/a\.x = side \* \((\d+) \+ Math\.random\(\) \* (\d+)\)/);
+ok(airN <= 40 && +airX[1] >= 150, `nitro air: ${airN} streaks out on the side lanes (|x| >= ${airX[1]})`);
+ok(+(src.match(/NPC_SPEED = (\d+)/) || [])[1] === 60 && +(src.match(/SPEED_CRUISE = (\d+)/) || [])[1] === 160,
+   'speeds unchanged: cruise 160, traffic 60');
+ok(RACE_SECONDS === 150, 'races are still 2:30');
+window.playSolo();
+for (let i = 0; i < 5; i++) fire();
+ok(el('timer-txt').innerText === '2:30' && el('wheel-zone').style.display === 'block' &&
+   el('controls-right').style.display === 'flex', 'wheel, pedals and HUD all appear with the race');
+ok(src.includes('ENGINE_VOLUME = 0.055') && /DynamicsCompressor/.test(src), 'audio still loud and compressed');
+
+for (const style of car3d.STYLE_NAMES) {
+    const car = car3d.buildCar(style, '#00f0ff');
+    const pts = [];
+    car.updateMatrixWorld(true);
+    car.traverse(o => {
+        if (!o.isMesh || o.userData.decal || !o.geometry) return;
+        const p = o.geometry.attributes.position;
+        for (let i = 0; i < p.count; i++) pts.push(new THREE.Vector3().fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld));
+    });
+    const bb = new THREE.Box3().setFromPoints(pts);
+    const at = (t) => pts.filter(t);
+    const frontR = car.userData.handle.wheels[0].position.y, rearR = car.userData.handle.wheels[2].position.y;
+    ok(Math.abs(bb.max.x - bb.min.x - 44) <= 4 && bb.max.y - bb.min.y > 15 && bb.max.y - bb.min.y < 24 &&
+       Math.max(...at(p => p.z < -35).map(p => Math.abs(p.x))) > 19 &&
+       Math.max(...at(p => p.z > 34).map(p => p.y)) > rearR * 2 &&
+       Math.max(...at(p => p.z > -14 && p.z < -3 && Math.abs(p.x) < 8).map(p => p.y)) > frontR * 2,
+       `${style}: still an F1 single-seater`);
+}
+window.playSolo();
+for (let i = 0; i < 60; i++) fire();
+const wP = new World(env.gameCanvas); wP.renderer.render = () => {};
+for (let c = 0; c < 5; c++) { wP.playerHit(); for (let i = 0; i < 60; i++) wP.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: i }); }
+ok(Math.abs(wP.playerCar.rotation.x) < 0.001, 'car dead level after five crashes');
+let gk = 0; while (ammo() < 10 && gk++ < 20000) fire();
+const ga = ammo(); window.useGhost();
+ok(ammo() === ga - 5, `GHOST costs 5 (${ga} -> ${ammo()})`);
+let on = 0, onDrop = 0, offDrop = 0, ps = score();
+const ghostSub = el('skill-btn-ghost').querySelector('.btn-sub');
+for (let i = 0; i < 700; i++) {
+    if (i % 170 === 0) window.useGhost();
+    fire();
+    const now = score(); const crashedNow = now < ps - 400; ps = now;
+    if (/^\d+s$/.test(ghostSub.innerText || '')) { on++; if (crashedNow) onDrop++; } else if (crashedNow) offDrop++;
+}
+ok(on > 250 && onDrop === 0, `ghost still phases through traffic (${onDrop} crashes in ${on} ghost frames)`);
+
+console.log('\n=== long run, both shapes, no exceptions ===');
+let err = null, frames = 0;
+try {
+    for (let i = 0; i < 1200; i++) {
+        if (!rafCb) break;
+        if (i === 200) { el('btn-boost').fire('touchstart', {}); env.win.fire('keydown', { key: 'w' }); }
+        if (i === 400) { el('btn-boost').fire('touchend', {}); env.win.fire('keyup', { key: 'w' }); }
+        if (i === 600) { el('btn-brake').fire('touchstart', {}); env.win.fire('keydown', { key: 'a' }); }
+        if (i === 700) { el('btn-brake').fire('touchend', {}); env.win.fire('keyup', { key: 'a' }); }
+        if (i === 800) { touchAt('touchstart', CX, CY + 300); touchAt('touchmove', CX + 200, CY + 200); }
+        if (i === 1000) zone.fire('touchend', { touches: [] });
+        if (i % 120 === 0) { window.useGhost(); window.useNuke(); window.shootBullet(); }
+        fire(); frames++;
+    }
+} catch (e) { err = e; }
+ok(!err, `1200 frames, wheel + pedals + abilities, no exception ${err ? '(' + err.stack.split('\n').slice(0, 2).join(' | ') + ')' : ''}`);
+ok(frames === 1200, `all 1200 frames rendered (${frames})`);
+for (const [vw, vh] of [[844, 390], [740, 360], [480, 850], [360, 640], [1024, 768]]) {
+    env.setSize(vw, vh);
+    let e2 = null; try { for (let i = 0; i < 60; i++) fire(); } catch (e) { e2 = e; }
+    ok(!e2, `${vw}x${vh}: 60 frames clean ${e2 ? '(' + e2.message + ')' : ''}`);
+}
+env.setSize(844, 390);
+
+/* =================================================================== */
+console.log('\n=== quick match still pairs two strangers and cleans up ===');
+T.advance(RACE_MS); await flush();
+el('random-name').value = 'ALICE';
+A.findRandomGame();
+await flush();
+ok(Object.keys(db._get(['car_matchmaking']) || {}).length === 1, 'first player queues');
+await import('../script.js?player2');
+const B = grab();
+el('random-name').value = 'BOB';
+B.findRandomGame();
+await flush(); await flush();
+const rooms = db._get(['car_rooms']) || {};
+const codes = Object.keys(rooms);
+ok(codes.length === 1 && Object.keys((rooms[codes[0]] || {}).players || {}).length === 2, 'one room, both drivers');
+const before = T.createdIntervals;
+T.advance(4500);
+ok(T.createdIntervals >= before + 2, 'and both games start themselves');
+T.advance(RACE_MS); await flush();
+T.advance(20000); await flush();
+ok(!db._get(['car_rooms', codes[0]]), 'the room is wiped from Firebase afterwards');
+const hist = audio.log.history;
+ok(hist.lastIndexOf(0) >= 0, 'the engine is cut when a race ends');
+window.playSolo();
+for (let i = 0; i < 5; i++) fire();
+ok(hist.lastIndexOf(0.055) > hist.lastIndexOf(0), 'and the engine comes back for the next race');
+
+console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
+process.exit(fail ? 1 : 0);

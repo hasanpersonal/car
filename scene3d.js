@@ -36,6 +36,20 @@ export const CAM = {
     lookZ: -340         // shallow aim: drops the car to ~62% of screen height
 };
 
+/* The same rig, solved for a phone on its side. Portrait keeps the road
+   wider than the screen, so a landscape view has to zoom IN or the road
+   shrinks to a 45%-wide strip with a 40px car on it. Aiming further down
+   the track flattens the pitch, which puts the horizon back in frame and
+   drops the car to ~75-92% of the height — low, where a rotated phone has
+   the most room, with the whole road ahead visible. */
+const CAM_WIDE = { fov: 38, camY: 185, camZ: 310, lookY: -90, lookZ: -700 };
+const CAM_KEYS = ['fov', 'camY', 'camZ', 'lookY', 'lookZ'];
+const CAM_TALL = { fov: 60, camY: 220, camZ: 330, lookY: -90, lookZ: -340 };
+/* 0 at aspect 0.72 (every portrait phone), 1 at 1.75 and wider */
+export function camBlend(aspect) {
+    return Math.max(0, Math.min(1, (aspect - 0.72) / (1.75 - 0.72)));
+}
+
 export class World {
     constructor(canvas) {
         this.canvas = canvas;
@@ -510,7 +524,12 @@ export class World {
         const h = this.canvas.clientHeight || window.innerHeight;
         this.renderer.setSize(w, h, false);
         this.aspect = w / h;
+        /* re-aim the rig for the shape of the screen: portrait keeps the
+           tuning above, landscape swaps in the wide rig */
+        const t = camBlend(this.aspect);
+        for (const k of CAM_KEYS) CAM[k] = CAM_TALL[k] + (CAM_WIDE[k] - CAM_TALL[k]) * t;
         this.camera.aspect = this.aspect;
+        this.camera.fov = CAM.fov;
         this.camera.updateProjectionMatrix();
     }
 

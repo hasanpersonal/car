@@ -10,37 +10,57 @@
 
     <div id="game-container">
         
+        <!-- Readouts sit in the two TOP CORNERS so the road, and the whole
+             middle of the screen, stay clear when the phone is on its side. -->
         <div id="hud">
-            <div class="hud-top">
+            <div id="hud-left" class="hud-cluster">
                 <div class="hud-item"><div class="hud-label">SCORE</div><div id="score-txt" class="hud-val">00000</div></div>
-                <div class="hud-item" style="text-align: center;"><div class="hud-label">TIME LEFT</div><div id="timer-txt" class="hud-val" style="color: #ffea00;">2:30</div></div>
-                <div class="hud-item" style="text-align: right;"><div class="hud-label">SPEED</div><div id="speed-txt" class="hud-val">0 KMH</div></div>
-            </div>
-            
-            <div id="distance-tracker">
-                <div class="tracker-label" style="display: flex; justify-content: space-between;">
-                    <span>RACE PROGRESS</span>
-                    <span id="km-txt" style="color: #00ff66;">0.00 KM</span>
+                <div class="hud-item"><div class="hud-label">SPEED</div><div id="speed-txt" class="hud-val">0 KMH</div></div>
+
+                <div id="distance-tracker">
+                    <div class="tracker-label" style="display: flex; justify-content: space-between;">
+                        <span>RACE PROGRESS</span>
+                        <span id="km-txt" style="color: #00ff66;">0.00 KM</span>
+                    </div>
+                    <div class="tracker-bg" id="tracker-lanes"></div>
                 </div>
-                <div class="tracker-bg" id="tracker-lanes"></div>
             </div>
 
-            <div class="nitro-container">
-                <div class="nitro-title">NITRO</div>
-                <div class="nitro-bar-bg"><div id="nitro-bar-fill" class="nitro-bar-fill"></div></div>
-                <div id="nitro-percent-txt" class="nitro-percent">0%</div>
+            <div id="hud-right" class="hud-cluster">
+                <div class="hud-item" style="text-align: right;"><div class="hud-label">TIME LEFT</div><div id="timer-txt" class="hud-val" style="color: #ffea00;">2:30</div></div>
+                <div class="nitro-container">
+                    <div class="nitro-title">NITRO</div>
+                    <div class="nitro-bar-bg"><div id="nitro-bar-fill" class="nitro-bar-fill"></div></div>
+                    <div id="nitro-percent-txt" class="nitro-percent">0%</div>
+                </div>
+            </div>
+
+        </div>
+        <!-- STEERING: a real wheel, bottom left. Grab the rim anywhere and
+             turn it; it springs back to centre when you let go. -->
+        <div id="wheel-zone">
+            <div id="wheel">
+                <div id="wheel-rim" class="wheel-rim">
+                    <div class="wheel-spoke wheel-spoke-l"></div>
+                    <div class="wheel-spoke wheel-spoke-r"></div>
+                    <div class="wheel-spoke wheel-spoke-d"></div>
+                    <div class="wheel-hub"><span id="wheel-mark">NEON</span></div>
+                </div>
             </div>
         </div>
-        <!-- One column on the left: BOOST, BRAKE, SHOOT, GHOST, NUKE top to
-             bottom. The steering stick floats to wherever you first touch. -->
-        <div id="controls-left">
-            <div id="btn-boost" class="ctrl-btn boost empty"><div class="btn-title">BOOST</div><div class="btn-sub">0%</div></div>
-            <div id="btn-brake" class="ctrl-btn brake"><div class="btn-title">BRAKE</div><div class="btn-sub">HOLD</div></div>
-            <div id="shoot-btn" class="ctrl-btn shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
-            <div id="skill-btn-ghost" class="ctrl-btn skill-btn empty"><div class="btn-title">GHOST</div><div class="btn-sub">5 AMMO</div></div>
-            <div id="skill-btn-nuke" class="ctrl-btn skill-btn nuke empty"><div class="btn-title">NUKE</div><div class="btn-sub">5 AMMO</div></div>
+
+        <!-- PEDALS bottom right, side by side, with the abilities above them -->
+        <div id="controls-right">
+            <div id="ability-row">
+                <div id="shoot-btn" class="ctrl-btn shoot-btn empty"><div class="btn-title">SHOOT</div><div class="ammo-count">0 BULLETS</div></div>
+                <div id="skill-btn-ghost" class="ctrl-btn skill-btn empty"><div class="btn-title">GHOST</div><div class="btn-sub">5 AMMO</div></div>
+                <div id="skill-btn-nuke" class="ctrl-btn skill-btn nuke empty"><div class="btn-title">NUKE</div><div class="btn-sub">5 AMMO</div></div>
+            </div>
+            <div id="pedal-row">
+                <div id="btn-brake" class="pedal pedal-brake"><div class="pedal-hinge"></div><div class="pedal-face"><span class="btn-title">BRAKE</span></div></div>
+                <div id="btn-boost" class="pedal pedal-boost empty"><div class="pedal-hinge"></div><div class="pedal-face"><span class="btn-title">BOOST</span><span class="btn-sub">0%</span></div></div>
+            </div>
         </div>
-        <div id="joystick-container"><div id="joystick-knob"></div></div>
 
         <div id="start-screen" class="overlay">
             <h1>NEON DRIVE</h1>

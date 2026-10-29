@@ -35,8 +35,10 @@ const CRASH_STUN = 36;                    // ~0.6s at 60fps
 
 /* Traffic is much heavier now, so cars come from the very top of the road
    (deep in the fog) instead of blinking into existence halfway up it. */
-const MAX_ENEMIES = 9;
-const SPAWN_Y = -1800;          // screen units: ~97% fogged, well past the horizon
+const MAX_ENEMIES = 11;          // a longer road needs more cars to keep it busy
+/* switched from portrait to landscape: the road runs 2200u further into the
+   fog, so launching there now drops them in visibly instead of at the far end */
+const SPAWN_Y = -3000;          // world z -3690: right up at the start of the road
 
 /* Don't drop a new car on top of one that is still near the spawn line. */
 function canSpawn(list) {
@@ -99,7 +101,7 @@ canvas.addEventListener('webglcontextrestored', () => { if (world) world.resize(
 window.addEventListener('orientationchange', () => setTimeout(() => world && world.resize(), 250));
 
 const hud = document.getElementById('hud');
-const ctrlLeft = document.getElementById('controls-left');
+const ctrlRight = document.getElementById('controls-right');
 const btnShoot = document.getElementById('shoot-btn');
 const btnBoost = document.getElementById('btn-boost');
 const btnBrake = document.getElementById('btn-brake');
@@ -110,14 +112,25 @@ const boostSub = btnBoost ? btnBoost.querySelector('.btn-sub') : null;
 let boostHeld = false, brakeHeld = false;
 /* the stick steers; you only get nitro/brake by shoving it well past that */
 const JOY_HOLD_DY = 34;              // out of a 55px range
-const joyWantsNitro = () => joyActive && joyDY < -JOY_HOLD_DY && Math.abs(joyDY) > Math.abs(joyDX);
-const joyWantsBrake = () => joyActive && joyDY > JOY_HOLD_DY && Math.abs(joyDY) > Math.abs(joyDX);
-const joyContainer = document.getElementById('joystick-container');
-const joyKnob = document.getElementById('joystick-knob');
+const wheelZone = document.getElementById('wheel-zone');
+const wheelRim = document.getElementById('wheel-rim');
 
-let joyActive = false, joyTouchId = null, joyStartX = 0, joyStartY = 0;
-let joyDX = 0, joyDY = 0, brakeActive = false;
-const maxRange = 55; 
+/* A wheel, not a stick: grab the rim and turn it, and it springs back to
+   centre when you let go. WHEEL_MAX is the lock in degrees each way. */
+const WHEEL_MAX = 120;
+let wheelAngle = 0, wheelGrab = false, wheelTouchId = null;
+let wheelNearHub = false, wheelStartAngle = 0, wheelStartX = 0, wheelStartWheel = 0;
+let brakeActive = false;
+const wheelSteer = () => wheelAngle / WHEEL_MAX;        // -1 (full left) .. 1 (full right)
+function wheelSetAngle(deg) {
+    wheelAngle = Math.max(-WHEEL_MAX, Math.min(WHEEL_MAX, deg));
+    if (wheelRim) wheelRim.style.transform = `rotate(${wheelAngle}deg)`;
+}
+function wheelCentre() {
+    if (!wheelRim) return { x: 0, y: 0, r: 1 };
+    const r = wheelRim.getBoundingClientRect();
+    return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: Math.max(1, r.width / 2) };
+}
 let audioCtx, engineOsc, engineGain, masterGain;
 const MASTER_VOLUME = 1.0;      // overall output
 const SFX_VOLUME = 1.7;         // effects were barely audible before
@@ -514,47 +527,63 @@ function playSfx(freq, type, dur, vol) {
 }
 
 const gameContainer = document.getElementById('game-container');
-gameContainer.addEventListener('touchstart', (e) => {
-    if (!gameActive) return;
-    if (e.target.closest('.ctrl-btn') || e.target.closest('.overlay')) return;
 
+/* ---- steering wheel ---- */
+function wheelGrabAt(t) {
+    const c = wheelCentre();
+    const dx = t.clientX - c.x, dy = t.clientY - c.y;
+    wheelGrab = true; wheelTouchId = t.identifier;
+    /* near the hub the angle is all noise, so steer by drag there instead */
+    wheelNearHub = Math.hypot(dx, dy) < c.r * 0.32;
+    wheelStartAngle = Math.atan2(dy, dx) * 180 / Math.PI;
+    wheelStartX = t.clientX;
+    wheelStartWheel = wheelAngle;
+}
+if (wheelZone) {
+    wheelZone.addEventListener('touchstart', (e) => {
+        if (!gameActive) return;
+        e.preventDefault(); e.stopPropagation();
+        if (e.touches.length) wheelGrabAt(e.touches[0]);
+    }, { passive: false });
 
-    const rect = gameContainer.getBoundingClientRect();
-    for (let i = 0; i < e.touches.length; i++) {
-        const touch = e.touches[i];
-        if (!joyActive) {
-            joyActive = true; joyTouchId = touch.identifier;
-            joyStartX = touch.clientX; joyStartY = touch.clientY;
-            joyContainer.style.display = 'block';
-            joyContainer.style.left = `${touch.clientX - rect.left}px`;
-            joyContainer.style.top = `${touch.clientY - rect.top}px`;
-            joyKnob.style.transform = 'translate(0px, 0px)';
+    wheelZone.addEventListener('touchmove', (e) => {
+        if (!wheelGrab) return;
+        for (const t of e.touches) {
+            if (t.identifier !== wheelTouchId) continue;
+            const c = wheelCentre();
+            let delta;
+            if (wheelNearHub) {
+                delta = (t.clientX - wheelStartX) * 1.7;
+            } else {
+                const a = Math.atan2(t.clientY - c.y, t.clientX - c.x) * 180 / Math.PI;
+                delta = ((a - wheelStartAngle + 540) % 360) - 180;   // shortest way round
+            }
+            wheelSetAngle(wheelStartWheel + delta);
             break;
         }
-    }
-});
+        e.preventDefault(); e.stopPropagation();
+    }, { passive: false });
 
-gameContainer.addEventListener('touchmove', (e) => {
-    if (!joyActive) return;
-    let targetTouch = null;
-    for (let i = 0; i < e.touches.length; i++) {
-        if (e.touches[i].identifier === joyTouchId) { targetTouch = e.touches[i]; break; }
-    }
-    if (!targetTouch) return;
-    joyDX = targetTouch.clientX - joyStartX; joyDY = targetTouch.clientY - joyStartY;
-    const distance = Math.sqrt(joyDX * joyDX + joyDY * joyDY);
-    if (distance > maxRange) { joyDX = (joyDX / distance) * maxRange; joyDY = (joyDY / distance) * maxRange; }
-    joyKnob.style.transform = `translate(${joyDX}px, ${joyDY}px)`;
-});
+    const wheelRelease = (e) => {
+        if (!wheelGrab) return;
+        let still = false;
+        for (const t of e.touches) if (t.identifier === wheelTouchId) still = true;
+        if (!still) { wheelGrab = false; wheelTouchId = null; }
+    };
+    wheelZone.addEventListener('touchend', wheelRelease);
+    wheelZone.addEventListener('touchcancel', wheelRelease);
 
-gameContainer.addEventListener('touchend', (e) => {
-    if (!joyActive) return;
-    let stillActive = false;
-    for (let i = 0; i < e.touches.length; i++) {
-        if (e.touches[i].identifier === joyTouchId) { stillActive = true; break; }
-    }
-    if (!stillActive) { joyActive = false; joyTouchId = null; joyDX = 0; joyDY = 0; joyContainer.style.display = 'none'; }
-});
+    /* desktop: drag the wheel with the mouse too */
+    wheelZone.addEventListener('mousedown', (e) => { if (gameActive) { wheelGrabAt(e); wheelTouchId = null; } });
+    window.addEventListener('mousemove', (e) => {
+        if (!wheelGrab || wheelTouchId !== null) return;
+        const c = wheelCentre();
+        const delta = wheelNearHub ? (e.clientX - wheelStartX) * 1.7
+            : ((Math.atan2(e.clientY - c.y, e.clientX - c.x) * 180 / Math.PI - wheelStartAngle + 540) % 360) - 180;
+        wheelSetAngle(wheelStartWheel + delta);
+    });
+    window.addEventListener('mouseup', () => { wheelGrab = false; wheelTouchId = null; });
+}
 
 const keys = { a: false, d: false, w: false, s: false };
 window.addEventListener('keydown', e => {
@@ -592,7 +621,8 @@ function bindHold(el, down, up) {
 bindButton(btnShoot, shootBullet);
 bindButton(btnSkillGhost, useGhost);
 bindButton(btnSkillNuke, useNuke);
-bindHold(btnBoost, () => { boostHeld = true; }, () => { boostHeld = false; });
+bindHold(btnBoost, () => { boostHeld = true; btnBoost.classList.add('held'); },
+                  () => { boostHeld = false; if (btnBoost) btnBoost.classList.remove('held'); });
 bindHold(btnBrake, () => { brakeHeld = true; btnBrake.classList.add('held'); },
                    () => { brakeHeld = false; if (btnBrake) btnBrake.classList.remove('held'); });
 
@@ -669,7 +699,7 @@ class Player {
         this.vx = 0; this.angle = 0;
     }
     update() {
-        let targetVX = joyActive ? (joyDX / maxRange) * 10 : (keys.a ? -8 : keys.d ? 8 : 0);
+        let targetVX = Math.abs(wheelAngle) > 0.5 ? wheelSteer() * 10 : (keys.a ? -8 : keys.d ? 8 : 0);
         this.vx += (targetVX - this.vx) * 0.25;
         this.x += this.vx; this.angle = this.vx * 0.012;
         if(this.x < 22) { this.x = 22; this.vx = 0; }
@@ -775,9 +805,9 @@ function restartGame() {
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = 0; bullets = 0; crashStun = 0;
     raceTimeLeft = RACE_SECONDS; 
-    gameActive = true; joyActive = false; joyTouchId = null; screenFlash = 0;
+    gameActive = true; screenFlash = 0;
     ghostActive = false; ghostTimer = 0;
-    joyContainer.style.display = 'none'; updateAmmoUI();
+    wheelSetAngle(0); wheelGrab = false; wheelTouchId = null; updateAmmoUI();
     document.getElementById('gameover-screen').classList.add('hidden');
     document.getElementById('leaderboard-box').style.display = 'none';
     document.getElementById('timer-txt').innerText = fmtTime(RACE_SECONDS);
@@ -826,16 +856,18 @@ function endRaceDuration() {
 /* every on-screen control, so nothing is left live behind an overlay */
 function hideControls() {
     hud.style.display = 'none';
-    if(ctrlLeft) ctrlLeft.style.display = 'none';
-    /* a held button or a live stick must never be left on behind an overlay */
+    if(ctrlRight) ctrlRight.style.display = 'none';
+    if(wheelZone) wheelZone.style.display = 'none';
+    /* a held pedal or a turned wheel must never be left on behind an overlay */
     boostHeld = false; brakeHeld = false;
     if(btnBrake) btnBrake.classList.remove('held');
-    joyActive = false; joyTouchId = null; joyDX = 0; joyDY = 0;
-    if(joyContainer) joyContainer.style.display = 'none';
+    if(btnBoost) btnBoost.classList.remove('held');
+    wheelGrab = false; wheelTouchId = null; wheelSetAngle(0);
 }
 function showControls() {
     hud.style.display = 'block';
-    if(ctrlLeft) ctrlLeft.style.display = 'flex';
+    if(ctrlRight) ctrlRight.style.display = 'flex';
+    if(wheelZone) wheelZone.style.display = 'block';
 }
 
 // --- NEW FUNCTION: BACK TO LOBBY (WITHOUT DISCONNECTING) ---
@@ -929,11 +961,14 @@ function syncOpponents() {
 function render() {
     if(screenShake > 0) { screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0; }
 
+    /* the steering wheel self-centres the moment you let go of it */
+    if(!wheelGrab && wheelAngle !== 0) wheelSetAngle(Math.abs(wheelAngle) < 0.6 ? 0 : wheelAngle * 0.80);
+
     if(gameActive) {
         /* steering is the stick's whole job; nitro and brake only kick in
            when you drag it well past that, or you hold the new buttons */
-        let nitroReq = joyWantsNitro() || keys.w || boostHeld;
-        let brakeReq = joyWantsBrake() || keys.s || brakeHeld; 
+        let nitroReq = keys.w || boostHeld;
+        let brakeReq = keys.s || brakeHeld; 
         isNitro = nitroReq && nitro > 0;
         brakeActive = brakeReq;
         
