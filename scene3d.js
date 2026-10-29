@@ -760,9 +760,10 @@ export class World {
         /* Full base pose every frame. rotation.x used to be touched only by the
            crash animation below, so every crash added its tumble to the last one
            and the car drove around permanently nose-up. */
-        /* the car sits on a bend, so it points where the road points, on top
-           of however much the player is steering */
-        car.rotation.set(0, -(opts.steer || 0) * 0.10 + this.curveYawAt(z), -(opts.steer || 0) * 0.045);
+        /* Only the player's steering turns this car. It used to be yawed to
+           match the road as well, which looked like the car steering itself
+           into every bend; the driver is meant to do that. */
+        car.rotation.set(0, -(opts.steer || 0) * 0.10, -(opts.steer || 0) * 0.045);
         h.setBrake(opts.brake || 0);
         h.setBoost(opts.boost || 0);
         this._boost = opts.boost || 0;
@@ -796,9 +797,12 @@ export class World {
         const off = Math.max(-limit, Math.min(limit, x * (1 - CAM.follow)));
         const cx = x - off;
         this.camera.position.set(cx + this.camShake.x, CAM.camY + this.camShake.y, z + CAM.camZ);
-        /* aim where the road will be, not straight ahead: on a bend the view
-           swings to keep the vanishing point in frame */
-        this.camera.lookAt(cx + this.bendAt(z + CAM.lookZ) * 0.55, CAM.lookY, z + CAM.lookZ);
+        /* Deliberately NOT aimed down the bend: the camera holds its line so
+           the car runs straight down the middle of the screen and the road
+           snakes across it, the way an arcade racer does. Swinging the camera
+           to follow the bend made the car slide about and read as the car
+           steering itself. */
+        this.camera.lookAt(cx, CAM.lookY, z + CAM.lookZ);
     }
 
     /* ---------------------------------------------------------------- */

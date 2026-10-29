@@ -338,9 +338,10 @@ h1 {
     -webkit-touch-callout: none; touch-action: none;
     height: clamp(54px, 15vmin, 96px);
 }
-/* the order is pinned here as well as in the markup: brake is always the left pedal */
-.pedal-brake { width: clamp(78px, 21vmin, 150px); order: 1; }
-.pedal-boost { width: clamp(64px, 17vmin, 124px); order: 2; }
+/* BOOST is the left pedal and BRAKE the right, and the order is pinned here as
+   well as in the markup so it cannot drift if the markup is ever reordered */
+.pedal-boost { width: clamp(64px, 17vmin, 124px); order: 1; }
+.pedal-brake { width: clamp(78px, 21vmin, 150px); order: 2; }
 .pedal-hinge {
     position: absolute; top: -3px; left: 14%; right: 14%; height: 6px; border-radius: 3px;
     background: linear-gradient(180deg, #6a748d, #232a3d); box-shadow: 0 1px 3px rgba(0,0,0,0.6);
@@ -443,8 +444,8 @@ h1 {
     /* rotated, the corners are roomy: bigger wheel, bigger buttons */
     .ctrl-btn { width: clamp(56px, 18vmin, 104px); height: clamp(56px, 18vmin, 104px); }
     .pedal { height: clamp(64px, 19vmin, 132px); }
-    .pedal-brake { width: clamp(92px, 26vmin, 190px); }
     .pedal-boost { width: clamp(76px, 21vmin, 155px); }
+    .pedal-brake { width: clamp(92px, 26vmin, 190px); }
     /* menus go sideways too, so nothing has to be scrolled to be reached */
     #start-screen { flex-direction: row; flex-wrap: wrap; align-content: safe center;
                     align-items: flex-start; gap: 10px; }
