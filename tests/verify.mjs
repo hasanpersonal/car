@@ -179,6 +179,28 @@ console.log('\n=== the road bends ===');
     }
     ok(carOff < 1 && camSwing < 0.01,
        `and it stays centred while the road snakes: worst drift ${carOff.toFixed(1)}px, camera swing ${camSwing.toFixed(2)}deg`);
+    /* the real complaint: the road used to slide out from under the car, so
+       the car looked like it was being swept the other way. The road has to
+       leave the car straight, and the car has to still be over it up ahead. */
+    let nearBend = 0, notOverRoad = 0;
+    for (let seed = 0; seed < 40; seed++) {
+        reseedCurves(seed);
+        for (let step = 0; step < 10; step++) {
+            w.scrollRoad(seed * 613 + step * 3700);
+            w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+            w.camera.updateMatrixWorld(true);
+            nearBend = Math.max(nearBend, Math.abs(w.bendAt(-250)));
+            for (const d of [600, 1000, 1500]) {
+                const c = w.bendAt(-d);
+                const l = new THREE.Vector3(c - 220, 0, -d).project(w.camera);
+                const r = new THREE.Vector3(c + 220, 0, -d).project(w.camera);
+                const lx = (l.x + 1) / 2 * 844, rx = (r.x + 1) / 2 * 844;
+                if (422 < lx || 422 > rx) notOverRoad++;         // car is off the tarmac
+            }
+        }
+    }
+    ok(nearBend < 30, `the road leaves the car straight: ${nearBend.toFixed(0)} units of bend 250u up the road`);
+    ok(notOverRoad <= 2, `and the car is still on the road up ahead (${notOverRoad}/1200 samples off the tarmac)`);
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
@@ -499,7 +521,35 @@ window.playSolo();
 for (let i = 0; i < 5; i++) fire();
 ok(el('timer-txt').innerText === '2:30' && el('wheel-zone').style.display === 'block' &&
    el('controls-right').style.display === 'flex', 'wheel, pedals and HUD all appear with the race');
-ok(src.includes('ENGINE_VOLUME = 0.055') && /DynamicsCompressor/.test(src), 'audio still loud and compressed');
+ok(/DynamicsCompressor/.test(src), 'audio still runs through one compressor');
+{
+    const EV = +(src.match(/ENGINE_VOLUME = ([\d.]+)/) || [])[1];
+    ok(EV >= 0.1, `the engine is turned up: ${EV} (a phone speaker needs it)`);
+    /* a phone cannot reproduce the fundamental, so the note needs a harmonic
+       and a filter that opens, not one bare oscillator */
+    ok(/engineOsc2\s*=\s*audioCtx\.createOscillator/.test(src) && /engineOsc2\.type\s*=\s*'square'/.test(src),
+       'there is a second oscillator for the rasp, not one bare saw');
+    ok(/engineFilter\.frequency\.setValueAtTime\(\s*\d+ \+ speed \*/.test(src),
+       'the filter opens with speed, so accelerating sounds like it');
+    /* and it has to actually track the revs while driving */
+    const [body, rasp] = audio.log.osc;                       // the first two oscillators are the engine
+    const [cut] = audio.log.filter;
+    const engineGainNode = audio.log.gain.slice().sort((a, b) => b.gain.sets.length - a.gain.sets.length)[0];
+    window.playSolo();
+    for (let i = 0; i < 90; i++) fire();
+    const idle = body.frequency.set;
+    el('btn-boost').fire('touchstart', {});
+    for (let i = 0; i < 120; i++) fire();
+    const flat = body.frequency.set;
+    el('btn-boost').fire('touchend', {});
+    ok(flat > idle * 1.5, `and the note follows the speed (${idle.toFixed(0)}Hz cruising -> ${flat.toFixed(0)}Hz under boost)`);
+    ok(Math.abs(rasp.frequency.set / body.frequency.set - 2) < 0.1, 'the rasp sits an octave above the body');
+    ok(cut.frequency.set > 400 && cut.frequency.sets.length > 100,
+       `with the filter opening as it revs (${cut.frequency.sets[0].toFixed(0)}Hz -> ${cut.frequency.set.toFixed(0)}Hz)`);
+    ok(engineGainNode.gain.sets.some(v => v > EV * 0.5), 'and the engine is audible while a race is running');
+    ok(audio.log.resumed > 0 && audio.log.ctx.state === 'running',
+       'and the audio context is woken up, so a phone is never left silent');
+}
 window.playSolo();
 for (let i = 0; i < 3; i++) fire();
 ok(nitroPct() === 80, `every race starts with a mostly full tank (${nitroPct()}%)`);
@@ -613,7 +663,7 @@ const hist = audio.log.history;
 ok(hist.lastIndexOf(0) >= 0, 'the engine is cut when a race ends');
 window.playSolo();
 for (let i = 0; i < 5; i++) fire();
-ok(hist.lastIndexOf(0.055) > hist.lastIndexOf(0), 'and the engine comes back for the next race');
+ok(hist.slice(hist.lastIndexOf(0) + 1).some(v => v > 0.05), 'and the engine comes back for the next race');
 
 console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
 process.exit(fail ? 1 : 0);

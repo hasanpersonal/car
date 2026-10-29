@@ -136,31 +136,46 @@ export function makeEnv(width = 480, height = 850) {
     } };
 }
 
-/* Web Audio stub that records what volume was actually asked for */
+/* Web Audio stub that records what was actually asked for: every node by
+   kind, in creation order, and every value set on every parameter. */
 export function makeAudio() {
-    const log = { gains: [], history: [] };      // history: every level asked for, in order
+    const log = { gains: [], history: [] };
     class Param {
-        constructor(v) { this.value = v; log.gains.push(this); }
-        setValueAtTime(v) { this.value = v; this.set = v; log.history.push(v); return this; }
+        constructor(v, what = '?') {
+            this.value = v; this.what = what; this.sets = [];
+            log.gains.push(this);
+        }
+        setValueAtTime(v) { this.value = v; this.set = v; this.sets.push(v); log.history.push(v); return this; }
         linearRampToValueAtTime(v) { return this; }
         exponentialRampToValueAtTime(v) { this.ramp = v; return this; }
     }
-    const node = (extra = {}) => Object.assign({
-        connect() { return this; }, disconnect() {}, start() {}, stop() {},
-        frequency: new Param(440), gain: new Param(1), Q: new Param(1),
-        detune: new Param(0), threshold: new Param(0), knee: new Param(0),
-        ratio: new Param(0), attack: new Param(0), release: new Param(0),
-        type: 'sine'
-    }, extra);
+    const node = (kind, extra = {}) => {
+        const n = Object.assign({
+            kind,
+            connect() { return this; }, disconnect() {}, start() {}, stop() {},
+            frequency: new Param(440, kind + '.frequency'),
+            gain: new Param(1, kind + '.gain'),
+            Q: new Param(1, kind + '.Q'),
+            detune: new Param(0, kind + '.detune'),
+            threshold: new Param(0, kind + '.threshold'),
+            knee: new Param(0, kind + '.knee'),
+            ratio: new Param(0, kind + '.ratio'),
+            attack: new Param(0, kind + '.attack'),
+            release: new Param(0, kind + '.release'),
+            type: 'sine'
+        }, extra);
+        (log[kind] || (log[kind] = [])).push(n);
+        return n;
+    };
     class Ctx {
-        constructor() { this.currentTime = 0; this.destination = node(); this.sampleRate = 44100; log.ctx = this; }
-        resume() { return Promise.resolve(); }
-        createOscillator() { return node(); }
-        createGain() { return node(); }
-        createBiquadFilter() { return node(); }
-        createBufferSource() { return node(); }
-        createStereoPanner() { return node({ pan: new Param(0) }); }
-        createDynamicsCompressor() { return node(); }
+        constructor() { this.currentTime = 0; this.destination = node('dest'); this.sampleRate = 44100; this.state = 'suspended'; log.ctx = this; }
+        resume() { this.state = 'running'; log.resumed = (log.resumed || 0) + 1; return Promise.resolve(); }
+        createOscillator() { return node('osc'); }
+        createGain() { return node('gain'); }
+        createBiquadFilter() { return node('filter'); }
+        createBufferSource() { return node('bufsrc'); }
+        createStereoPanner() { return node('panner', { pan: new Param(0, 'panner.pan') }); }
+        createDynamicsCompressor() { return node('comp'); }
         createBuffer(c, l, r) { return { length: l, sampleRate: r, numberOfChannels: c, getChannelData: () => new Float32Array(l) }; }
     }
     return { Ctx, log };

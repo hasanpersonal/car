@@ -134,10 +134,10 @@ function wheelCentre() {
     const r = wheelRim.getBoundingClientRect();
     return { x: r.left + r.width / 2, y: r.top + r.height / 2, r: Math.max(1, r.width / 2) };
 }
-let audioCtx, engineOsc, engineGain, masterGain;
+let audioCtx, engineOsc, engineOsc2, engineFilter, engineRasp, engineGain, masterGain;
 const MASTER_VOLUME = 1.0;      // overall output
 const SFX_VOLUME = 1.7;         // effects were barely audible before
-const ENGINE_VOLUME = 0.055;    // idle engine level (was 0.015)
+const ENGINE_VOLUME = 0.12;     // engine level (was 0.015, then 0.055)
 
 // --- MULTIPLAYER ROOM SYSTEMS ---
 function createRoom() {
@@ -498,6 +498,13 @@ function initGameAndFullscreen() {
 function setupAudio() {
     if(audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    /* iOS leaves the context suspended unless it is made inside a real tap, and
+       a random match starts from a network callback rather than a tap. Wake it
+       now, and again on the first touch, so the engine is never silently dead. */
+    const wake = () => { if (audioCtx && audioCtx.state === 'suspended' && audioCtx.resume) audioCtx.resume().catch(() => {}); };
+    wake();
+    ['touchstart', 'mousedown', 'keydown'].forEach(type =>
+        document.addEventListener(type, wake, { once: true, passive: true }));
 
     masterGain = audioCtx.createGain();
     masterGain.gain.setValueAtTime(MASTER_VOLUME, audioCtx.currentTime);
@@ -509,15 +516,33 @@ function setupAudio() {
     comp.release.setValueAtTime(0.18, audioCtx.currentTime);
     masterGain.connect(comp); comp.connect(audioCtx.destination);
 
+    /* Engine: a low saw for the body, a detuned square an octave up for the
+       rasp, and a filter that opens as the revs climb. A phone speaker cannot
+       reproduce a 45 Hz fundamental at all, so it is the harmonics and the
+       filter you actually hear — which is why one bare oscillator was silent. */
     engineOsc = audioCtx.createOscillator();
-    engineGain = audioCtx.createGain();
     engineOsc.type = 'sawtooth';
-    engineOsc.frequency.setValueAtTime(40, audioCtx.currentTime);
+    engineOsc.frequency.setValueAtTime(45, audioCtx.currentTime);
 
-    let filter = audioCtx.createBiquadFilter();
-    filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, audioCtx.currentTime);
-    engineOsc.connect(filter); filter.connect(engineGain); engineGain.connect(masterGain);
-    engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime); engineOsc.start(0);
+    engineOsc2 = audioCtx.createOscillator();
+    engineOsc2.type = 'square';
+    engineOsc2.detune.setValueAtTime(9, audioCtx.currentTime);
+    engineOsc2.frequency.setValueAtTime(91, audioCtx.currentTime);
+    engineRasp = audioCtx.createGain();
+    engineRasp.gain.setValueAtTime(0.5, audioCtx.currentTime);   // sits under the body
+
+    engineFilter = audioCtx.createBiquadFilter();
+    engineFilter.type = 'lowpass';
+    engineFilter.frequency.setValueAtTime(400, audioCtx.currentTime);
+    engineFilter.Q.setValueAtTime(1.2, audioCtx.currentTime);
+
+    engineGain = audioCtx.createGain();
+    engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime);
+
+    engineOsc.connect(engineFilter);
+    engineOsc2.connect(engineRasp); engineRasp.connect(engineFilter);
+    engineFilter.connect(engineGain); engineGain.connect(masterGain);
+    engineOsc.start(0); engineOsc2.start(0);
 }
 
 function playSfx(freq, type, dur, vol) {
@@ -1010,7 +1035,19 @@ function render() {
         score += (speed * 0.015);
         roadOffset += (speed * 0.08);
 
-        if(engineOsc) engineOsc.frequency.setValueAtTime(40 + (speed/200)*140, audioCtx.currentTime);
+        /* the note follows the speed: revs climb, the rasp tracks an octave up
+           and the filter opens, so accelerating sounds like accelerating */
+        if(engineOsc && audioCtx) {
+            const rev = 45 + speed * 0.55;                      // 45 idle .. 275 flat out
+            engineOsc.frequency.setValueAtTime(rev, audioCtx.currentTime);
+            engineOsc2.frequency.setValueAtTime(rev * 2.02, audioCtx.currentTime);
+            engineFilter.frequency.setValueAtTime(320 + speed * 7, audioCtx.currentTime);
+            /* louder the faster you go, and it howls under nitro, but never
+               while the race is over — that mute is set in gameOver() */
+            if(engineGain && gameActive) engineGain.gain.setValueAtTime(
+                ENGINE_VOLUME * (isNitro ? 1.5 : 1) * (0.55 + Math.min(1, speed / 220) * 0.45),
+                audioCtx.currentTime);
+        }
 
         document.getElementById('score-txt').innerText = String(Math.floor(score)).padStart(5, '0');
         document.getElementById('speed-txt').innerText = `${Math.floor(speed)} KMH`;

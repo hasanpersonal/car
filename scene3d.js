@@ -38,10 +38,15 @@ const ROAD_SEGS = 150;              // the tarmac is a ribbon this many quads lo
  *  view of the road, not a change to how it is driven.
  * ------------------------------------------------------------------ */
 const CURVE_BANDS = [
-    { wave: 2600, amp: 270 },       // long sweepers
-    { wave: 1250, amp: 135 },       // the bends you actually steer for
-    { wave: 620, amp: 44 }          // ripple, so it is never a plain arc
+    { wave: 2600, amp: 125 },       // long sweepers
+    { wave: 1250, amp: 64 },        // the bends you actually steer for
+    { wave: 620, amp: 20 }          // ripple, so it is never a plain arc
 ];
+/* The road leaves the car dead straight and only starts bending from here.
+   Without it the tarmac slid out from under the car on every bend, which
+   read as the car being swept sideways: the near road has to belong to the
+   car before it is allowed to wander off. */
+const CURVE_RAMP = 700;
 const CURVE = CURVE_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
 function mulberry32(a) {
     return function () {
@@ -647,10 +652,17 @@ export class World {
             this._c0off = this.roadOffset; this._c0z = this._playerZ;
             this._centre0 = centreAt(this.roadOffset + NEAR_Z - this._playerZ);
         }
-        return centreAt(this.roadSAt(z)) - this._centre0;
+        const raw = centreAt(this.roadSAt(z)) - this._centre0;
+        const d = Math.abs(this._playerZ - z);            // how far up the road
+        return raw * Math.min(1, d / CURVE_RAMP);
     }
-    /* heading a car sitting at z would need to point along the road */
-    curveYawAt(z) { return -Math.atan(slopeAt(this.roadSAt(z))); }
+    /* heading a car sitting at z would need to point along the road. Taken
+       from the bend itself rather than the raw slope, so it honours the ramp
+       and is zero under the car. */
+    curveYawAt(z) {
+        const h = 30;
+        return Math.atan((this.bendAt(z + h) - this.bendAt(z - h)) / (2 * h));
+    }
 
     /* rebuild the tarmac, the barriers and their glow along the current bend */
     _shapeRoad() {
