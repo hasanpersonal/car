@@ -255,8 +255,11 @@ h1 {
     cursor: pointer; -webkit-user-select: none; user-select: none;
 }
 #skill-btn-left { left: calc(20px + (clamp(40px, 9.6vh, 82px) - clamp(34px, 7.8vh, 66px)) / 2); }
-#skill-btn-right {
-    right: calc(20px + (clamp(40px, 9.6vh, 82px) - clamp(34px, 7.8vh, 66px)) / 2);
+/* Placement only. The colours live on .nuke, a class, so the .empty state
+   below can actually win — an #id rule outranks .skill-btn.empty and left
+   the NUKE button glowing even when it was unusable. */
+#skill-btn-right { right: calc(20px + (clamp(40px, 9.6vh, 82px) - clamp(34px, 7.8vh, 66px)) / 2); }
+.skill-btn.nuke {
     background: radial-gradient(circle, #ffea00 0%, #4d3300 100%);
     border-color: #ffe97a; box-shadow: 0 0 18px rgba(255, 234, 0, 0.55);
 }
@@ -269,7 +272,10 @@ h1 {
     text-shadow: 0 1px 3px rgba(0,0,0,0.9);
 }
 .skill-btn:active { transform: scale(0.9); }
-.skill-btn.empty {
+/* listed after everything else, and with .nuke.empty for extra weight, so a
+   spent or unusable button really does go dark */
+.skill-btn.empty,
+.skill-btn.nuke.empty {
     background: rgba(30, 30, 40, 0.55); border-color: #555; box-shadow: none;
 }
 .skill-btn.empty .skill-title { color: #6d6d7a; text-shadow: none; }
