@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { World, wx, wz } from './scene3d.js';
+import { World, wx, wz, reseedCurves } from './scene3d.js';
 
 // --- FIREBASE CONFIGURATION ---
 const firebaseConfig = {
@@ -61,6 +61,9 @@ const SPEED_CRUISE = 160, SPEED_NITRO = 420, SPEED_BRAKE = 60;
 
 /* --- race length: 2.5 minutes --- */
 const RACE_SECONDS = 150;
+/* races start with most of a tank: you can clear the first bit of traffic
+   without waiting to farm a pickup */
+const START_NITRO = 80;
 const fmtTime = (s) => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;
 
 /* --- skills: both cost 5 ammo --- */
@@ -823,7 +826,8 @@ function restartGame() {
     if(engineGain) engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime);
     player = new Player();
     enemies = []; stars = []; particles = []; activeBullets = [];
-    score = 0; speed = 0; nitro = 0; bullets = 0; crashStun = 0;
+    score = 0; speed = 0; nitro = START_NITRO; bullets = 0; crashStun = 0;
+    reseedCurves();          // a fresh set of bends for every race
     raceTimeLeft = RACE_SECONDS; 
     gameActive = true; screenFlash = 0;
     ghostActive = false; ghostTimer = 0;
