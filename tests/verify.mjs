@@ -162,7 +162,23 @@ console.log('\n=== the road bends ===');
     reseedCurves(CURVE_SEED);
     w.scrollRoad(12345);
     w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
-    ok(Math.abs(w.playerCar.rotation.y - w.curveYawAt(0)) < 1e-6, 'the car points along the road, not straight ahead');
+    ok(Math.abs(w.playerCar.rotation.y) < 1e-9,
+       'the car is not turned by the bend: with no steering input it points dead ahead');
+    /* and the camera holds its line, so the car cannot slide about the screen */
+    let carOff = 0, camSwing = 0;
+    for (let seed = 0; seed < 12; seed++) {
+        reseedCurves(seed);
+        for (let step = 0; step < 8; step++) {
+            w.scrollRoad(seed * 811 + step * 3300);
+            w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+            w.camera.updateMatrixWorld(true);
+            const v = new THREE.Vector3(0, 21, 0).project(w.camera);
+            carOff = Math.max(carOff, Math.abs((v.x + 1) / 2 * 844 - 422));
+            camSwing = Math.max(camSwing, Math.abs(w.camera.rotation.y) * 180 / Math.PI);
+        }
+    }
+    ok(carOff < 1 && camSwing < 0.01,
+       `and it stays centred while the road snakes: worst drift ${carOff.toFixed(1)}px, camera swing ${camSwing.toFixed(2)}deg`);
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
@@ -170,8 +186,9 @@ console.log('\n=== the road bends ===');
     const kerb = new THREE.Matrix4();
     w.kerbs.getMatrixAt(0, kerb);
     const kp = new THREE.Vector3().setFromMatrixPosition(kerb);
-    ok(Math.abs(kp.x - (-214 + w.bendAt(kp.z))) < 1e-6,
-       'and so does the road furniture (rumble kerbs sit on the bending edge)');
+    /* instance matrices are float32, so allow a fraction of a unit */
+    ok(Math.abs(kp.x - (-214 + w.bendAt(kp.z))) < 0.02,
+       `and so does the road furniture (a kerb 1500u out sits ${kp.x.toFixed(1)} units over, matching the bend)`);
     reseedCurves(CURVE_SEED);
 }
 
@@ -261,6 +278,9 @@ for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android
 }
 const landL = layout(844, 390);
 ok(landL.brakeW > landL.boostW, 'BRAKE is the wider pedal, the way it is in a real car');
+/* left pedal first, whichever way round they are */
+ok(/id="pedal-row"[\s\S]*?id="btn-boost"[\s\S]*?id="btn-brake"/.test(htmlSrc),
+   'BOOST sits on the left of the pair, BRAKE on the right');
 
 /* =================================================================== */
 console.log('\n=== steering wheel, pedals, abilities ===');
@@ -268,9 +288,9 @@ ok(/id="wheel-zone"[\s\S]*id="wheel-rim"[\s\S]*wheel-hub/.test(htmlSrc), 'a real
 ok(!/joystick/.test(htmlSrc) && !/joystick/.test(src), 'the floating stick is gone');
 const abilities = (htmlSrc.match(/id="ability-row"[\s\S]*?<\/div>\s*<div id="pedal-row"/) || [''])[0];
 ok(/shoot-btn[\s\S]*skill-btn-ghost[\s\S]*skill-btn-nuke/.test(abilities), 'SHOOT, GHOST and NUKE sit above the pedals');
-ok(/id="pedal-row"[\s\S]*btn-brake[\s\S]*btn-boost/.test(htmlSrc), 'BOOST and BRAKE are side by side below them');
-ok(/\.pedal-brake\s*\{[^}]*order:\s*1/.test(cssSrc) && /\.pedal-boost\s*\{[^}]*order:\s*2/.test(cssSrc),
-   'and BRAKE is pinned to the left of BOOST, in CSS as well as in the markup');
+ok(/id="pedal-row"[\s\S]*btn-boost[\s\S]*btn-brake/.test(htmlSrc), 'BOOST and BRAKE are side by side below them');
+ok(/\.pedal-boost\s*\{[^}]*order:\s*1/.test(cssSrc) && /\.pedal-brake\s*\{[^}]*order:\s*2/.test(cssSrc),
+   'and BOOST is pinned to the left of BRAKE, in CSS as well as in the markup');
 ok(/id="hud-left"[\s\S]*score-txt[\s\S]*speed-txt/.test(htmlSrc), 'SCORE and SPEED are top-left');
 ok(/id="hud-right"[\s\S]*timer-txt[\s\S]*nitro/.test(htmlSrc), 'TIME and NITRO are top-right');
 ok(!/hud-top/.test(htmlSrc) && !/hud-top/.test(cssSrc), 'nothing is left spanning the middle of the top edge');
