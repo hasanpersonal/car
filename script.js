@@ -33,8 +33,29 @@ let screenShake = 0, roadOffset = 0, screenFlash = 0;
 let crashStun = 0;
 const CRASH_STUN = 36;                    // ~0.6s at 60fps
 
-/* Traffic cruises forward at the same 80 the brake drops you to. */
-const NPC_SPEED = 80;
+/* Traffic is much heavier now, so cars come from the very top of the road
+   (deep in the fog) instead of blinking into existence halfway up it. */
+const MAX_ENEMIES = 9;
+const SPAWN_Y = -1800;          // screen units: ~97% fogged, well past the horizon
+
+/* Don't drop a new car on top of one that is still near the spawn line. */
+function canSpawn(list) {
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const lane = [40, 140, 240, 340, 410][Math.floor(Math.random() * 5)];
+        let clear = true;
+        for (const e of list) {
+            if (e.y < SPAWN_Y + 420 && Math.abs((e.x + e.w / 2) - (lane + 22)) < 44) { clear = false; break; }
+        }
+        if (clear) { pendingLane = lane; return true; }
+    }
+    return false;
+}
+let pendingLane = null;
+
+/* Traffic cruises forward at the same speed the brake drops you to. */
+const NPC_SPEED = 60;
+/* Top speeds: slower than before now that the road is busier. */
+const SPEED_CRUISE = 160, SPEED_NITRO = 420, SPEED_BRAKE = 60;
 
 /* --- skills: both cost 5 ammo --- */
 const SKILL_COST = 5;
@@ -84,7 +105,10 @@ const joyKnob = document.getElementById('joystick-knob');
 let joyActive = false, joyTouchId = null, joyStartX = 0, joyStartY = 0;
 let joyDX = 0, joyDY = 0, brakeActive = false;
 const maxRange = 55; 
-let audioCtx, engineOsc, engineGain;
+let audioCtx, engineOsc, engineGain, masterGain;
+const MASTER_VOLUME = 1.0;      // overall output
+const SFX_VOLUME = 1.7;         // effects were barely audible before
+const ENGINE_VOLUME = 0.055;    // idle engine level (was 0.015)
 
 // --- MULTIPLAYER ROOM SYSTEMS ---
 function createRoom() {
@@ -108,6 +132,7 @@ function createRoom() {
         
         document.getElementById('start-screen').classList.add('hidden');
         document.getElementById('waiting-screen').classList.remove('hidden');
+        safeOnDisconnect(database.ref('car_rooms/' + currentRoom + '/players/' + myId));
         listenToRoom();
     });
 }
@@ -135,10 +160,185 @@ function joinRoom() {
     });
 }
 
+
+/* ------------------------------------------------------------------ *
+ *  QUICK MATCH — pair two strangers, then start the race by itself
+ * ------------------------------------------------------------------ */
+const MM_PATH = 'car_matchmaking';
+const MM_STALE = 90000;              // ignore queue entries older than 90s
+const START_DELAY = 3500;            // both cars launch off the same clock
+const ROOM_CLEANUP_DELAY = 15000;    // room is wiped this long after the flag
+let mmSearching = false, mmTimer = null, mmScan = null, mmListener = null;
+let mmQueued = false, mmScanning = false, mmTs = 0, mmWaited = 0;
+let raceStarting = false, roomClosed = false;
+
+/* queue entries and abandoned rooms clean themselves up */
+function safeOnDisconnect(ref) {
+    try { ref.onDisconnect().remove(); } catch (e) { /* older SDK */ }
+}
+function setSearchUI(text, searching) {
+    const t = document.getElementById('search-status');
+    const b = document.getElementById('btn-find-random');
+    if (t) t.innerText = text;
+    if (b) b.innerText = searching ? 'CANCEL SEARCH' : '⚡ FIND RANDOM PLAYER';
+}
+
+function findRandomGame() {
+    if (mmSearching) { cancelSearch(false); return; }
+    const name = (document.getElementById('random-name').value || '').trim()
+              || (document.getElementById('host-name').value || '').trim();
+    if (!name) return alert("Enter your name first!");
+    myName = name;
+    isMultiplayer = true;
+    roomClosed = false;
+    mmSearching = true; mmWaited = 0; mmQueued = false; mmTs = Date.now();
+    setSearchUI('SEARCHING FOR A DRIVER…', true);
+    mmTimer = setInterval(() => {
+        mmWaited++;
+        if (mmSearching) setSearchUI(`SEARCHING FOR A DRIVER… ${mmWaited}s`, true);
+        if (mmWaited >= 45) cancelSearch(true);
+    }, 1000);
+    mmLookForPartner();
+    /* keep looking: whoever arrives second finds the first, and a dead heat
+       on the queue timestamp resolves on the next pass */
+    mmScan = setInterval(() => { if (mmSearching) mmLookForPartner(); }, 2000);
+}
+
+function mmLookForPartner() {
+    if (mmScanning || !mmSearching) return;
+    mmScanning = true;
+    const q = database.ref(MM_PATH);
+    q.once('value').then(snap => {
+        mmScanning = false;
+        if (!mmSearching) return;
+        const now = Date.now();
+        let partner = null;
+        snap.forEach(c => {
+            const v = c.val();
+            if (!v || !v.id || v.id === myId) return;
+            if (v.matched || now - (v.ts || 0) > MM_STALE) return;
+            /* pair "up" only: whoever queued first hosts, so two players who
+               click at the same instant can never both open a room.
+               An identical timestamp is broken by comparing ids. */
+            if ((v.ts || 0) > mmTs) return;
+            if ((v.ts || 0) === mmTs && v.id < myId) return;
+            if (!partner || (v.ts || 0) < partner.ts) partner = { key: c.key, ...v };
+        });
+        if (!partner) return mmEnterQueue(q);
+        /* claim them with a transaction: only one player can win the pairing */
+        q.child(partner.key + '/matched').transaction(cur => (cur === null ? myId : cur))
+            .then(res => {
+                if (!mmSearching) return;
+                if (!res.committed) return;                         // beaten to it
+                mmStartWith(partner, q);
+            }).catch(() => mmEnterQueue(q));
+    }).catch(() => { mmScanning = false; if (mmSearching) setSearchUI('COULD NOT REACH THE SERVER', true); });
+}
+
+function mmStartWith(partner, q) {
+    const code = Math.floor(1000 + Math.random() * 9000).toString();
+    isHost = true;
+    currentRoom = code;
+    const players = {};
+    players[myId] = { name: myName, score: 0, x: gameWidth / 2, color: '#00f0ff' };
+    players[partner.id] = { name: partner.name || 'Rival', score: 0, x: gameWidth / 2,
+                            color: ['#a200ff', '#ff00aa', '#ffea00', '#00ff66'][Math.floor(Math.random() * 4)] };
+    database.ref('car_rooms/' + code).set({
+        status: 'playing', hostId: myId, auto: true,
+        startAt: Date.now() + START_DELAY, players
+    }).then(() => {
+        q.child(partner.key).update({ room: code, hostName: myName });
+        q.child(myId).remove();
+        mmStopSearch();
+        listenToRoom();
+    });
+}
+
+function mmEnterQueue(q) {
+    const ref = q.child(myId);
+    ref.set({ id: myId, name: myName, ts: mmTs });
+    if (mmQueued) return;                       // listener is already watching
+    mmQueued = true;
+    safeOnDisconnect(ref);
+    mmListener = ref.on('value', snap => {
+        const v = snap.val();
+        if (!v || !v.room) return;
+        if (!mmSearching) return;                // I already opened a room myself
+        try { ref.off('value', mmListener); } catch (e) {}
+        mmListener = null;
+        currentRoom = v.room; isHost = false; isMultiplayer = true;
+        mmStopSearch();
+        ref.remove();
+        listenToRoom();
+    });
+}
+
+function mmStopSearch() {
+    mmSearching = false;
+    if (mmTimer) { clearInterval(mmTimer); mmTimer = null; }
+    if (mmScan) { clearInterval(mmScan); mmScan = null; }
+    setSearchUI('', false);
+}
+function cancelSearch(timedOut) {
+    if (!mmSearching) return;
+    mmSearching = false;
+    if (mmTimer) { clearInterval(mmTimer); mmTimer = null; }
+    if (mmScan) { clearInterval(mmScan); mmScan = null; }
+    const ref = database.ref(MM_PATH + '/' + myId);
+    if (mmListener) { try { ref.off('value', mmListener); } catch (e) {} mmListener = null; }
+    ref.remove();
+    setSearchUI(timedOut ? 'NO DRIVERS FOUND — TRY AGAIN' : '', false);
+}
+
+/* "3… 2… 1…" so both cars launch on the same beat */
+function showStartCountdown(ms) {
+    document.getElementById('start-screen').classList.add('hidden');
+    document.getElementById('waiting-screen').classList.remove('hidden');
+    const startBtn = document.getElementById('btn-start');
+    if (startBtn) startBtn.style.display = 'none';
+    const msg = document.getElementById('waiting-msg');
+    let left = Math.max(1, Math.round(ms / 1000));
+    if (msg) msg.innerText = `MATCH FOUND — RACE STARTS IN ${left}…`;
+    const iv = setInterval(() => {
+        left--;
+        if (msg) msg.innerText = left > 0 ? `MATCH FOUND — RACE STARTS IN ${left}…` : 'GO!';
+        if (left <= 0) clearInterval(iv);
+    }, 1000);
+    setTimeout(() => clearInterval(iv), ms + 400);
+}
+
+/* the room is wiped once everyone is done, so nothing is left on the server */
+function scheduleRoomCleanup() {
+    if (!isMultiplayer || !currentRoom || !isHost || roomClosed) return;
+    const room = 'car_rooms/' + currentRoom;
+    safeOnDisconnect(database.ref(room));              // gone even if the host closes the tab
+    setTimeout(() => {
+        if (roomClosed) return;
+        roomClosed = true;
+        database.ref(room).remove();
+    }, ROOM_CLEANUP_DELAY);
+}
+function closeRoomNow() {
+    if (!isMultiplayer || !currentRoom || !isHost || roomClosed) return;
+    roomClosed = true;
+    database.ref('car_rooms/' + currentRoom).remove();
+}
+
 function listenToRoom() {
     database.ref('car_rooms/' + currentRoom).on('value', snapshot => {
         const data = snapshot.val();
-        if(!data) return;
+        if(!data) {                      // room was deleted — stop listening to it
+            try { database.ref('car_rooms/' + currentRoom).off(); } catch (e) {}
+            /* if the host pulled out of the lobby, send everyone back to it —
+               but never yank a player off the results screen */
+            const lobby = document.getElementById('waiting-screen');
+            if (!gameActive && lobby && !lobby.classList.contains('hidden')) {
+                lobby.classList.add('hidden');
+                document.getElementById('start-screen').classList.remove('hidden');
+                hideControls();
+            }
+            return;
+        }
 
         if (data.status === "waiting") {
             // রুমে ব্যাক করার পর গেম ওভার স্ক্রিন হাইড করে ওয়েটিং স্ক্রিন চালু করা
@@ -168,7 +368,17 @@ function listenToRoom() {
             }
         } 
         else if (data.status === "playing" && !gameActive) {
-            initGameAndFullscreen();
+            /* random matches carry a startAt so both cars launch together */
+            const wait = Math.max(0, (data.startAt || 0) - Date.now());
+            if (wait > 60) {
+                if (!raceStarting) {
+                    raceStarting = true;
+                    showStartCountdown(wait);
+                    setTimeout(() => { raceStarting = false; if (!gameActive) initGameAndFullscreen(); }, wait);
+                }
+            } else if (!raceStarting) {
+                initGameAndFullscreen();
+            }
         }
         
         if(data.players) {
@@ -254,26 +464,40 @@ function initGameAndFullscreen() {
     restartGame();
 }
 
+/* Everything runs through one compressor so the engine, the effects and the
+   nitro can all be turned up without clipping when they overlap. */
 function setupAudio() {
     if(audioCtx) return;
     audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.setValueAtTime(MASTER_VOLUME, audioCtx.currentTime);
+    const comp = audioCtx.createDynamicsCompressor();
+    comp.threshold.setValueAtTime(-14, audioCtx.currentTime);
+    comp.knee.setValueAtTime(24, audioCtx.currentTime);
+    comp.ratio.setValueAtTime(8, audioCtx.currentTime);
+    comp.attack.setValueAtTime(0.004, audioCtx.currentTime);
+    comp.release.setValueAtTime(0.18, audioCtx.currentTime);
+    masterGain.connect(comp); comp.connect(audioCtx.destination);
+
     engineOsc = audioCtx.createOscillator();
     engineGain = audioCtx.createGain();
     engineOsc.type = 'sawtooth';
     engineOsc.frequency.setValueAtTime(40, audioCtx.currentTime);
-    
+
     let filter = audioCtx.createBiquadFilter();
     filter.type = 'lowpass'; filter.frequency.setValueAtTime(180, audioCtx.currentTime);
-    engineOsc.connect(filter); filter.connect(engineGain); engineGain.connect(audioCtx.destination);
-    engineGain.gain.setValueAtTime(0.015, audioCtx.currentTime); engineOsc.start(0);
+    engineOsc.connect(filter); filter.connect(engineGain); engineGain.connect(masterGain);
+    engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime); engineOsc.start(0);
 }
 
 function playSfx(freq, type, dur, vol) {
     if(!audioCtx) return;
     let osc = audioCtx.createOscillator(); let gain = audioCtx.createGain();
     osc.type = type; osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
-    gain.gain.setValueAtTime(vol, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + dur);
-    osc.connect(gain); gain.connect(audioCtx.destination); osc.start(); osc.stop(audioCtx.currentTime + dur);
+    const v = Math.min(0.9, vol * SFX_VOLUME);
+    gain.gain.setValueAtTime(v, audioCtx.currentTime); gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + dur);
+    osc.connect(gain); gain.connect(masterGain); osc.start(); osc.stop(audioCtx.currentTime + dur);
 }
 
 const gameContainer = document.getElementById('game-container');
@@ -454,16 +678,17 @@ class Enemy {
     constructor() {
         this.w = 44; this.h = 85;
         const lanes = [40, 140, 240, 340, 410];
-        this.x = lanes[Math.floor(Math.random() * lanes.length)] + (Math.random()*8 - 4);
-        this.y = -250;
+        /* canSpawn() chose a gap; fall back to a random lane if called directly */
+        this.x = (pendingLane !== null ? pendingLane : lanes[Math.floor(Math.random() * lanes.length)]) + (Math.random()*8 - 4);
+        this.y = SPAWN_Y;
         this.color = ['#a200ff', '#00ff66', '#ff8800', '#ff00aa'][Math.floor(Math.random() * 4)];
         /* body shape + a personal animation offset so no two cars move alike */
         const shapes = ['f1', 'f2', 'f3', 'f4', 'f2'];
         this.style = shapes[Math.floor(Math.random() * shapes.length)];
         this.phaseOff = Math.random() * 400;
     }
-    /* Traffic is moving too — it drives forward at the brake speed (80), so
-       you reel it in instead of it charging at you. Brake to 80 and you match
+    /* Traffic is moving too — it drives forward at the brake speed (60), so
+       you reel it in instead of it charging at you. Brake to 60 and you match
        it exactly; stop dead after a crash and it drives away from you. */
     update() { this.y += (speed - NPC_SPEED) * 0.08; }
     /* world-space position + the bits the 3D renderer needs */
@@ -476,7 +701,7 @@ class Enemy {
 class Star {
     constructor() {
         this.r = 18; const lanes = [50, 150, 250, 350, 420];
-        this.x = lanes[Math.floor(Math.random() * lanes.length)]; this.y = -250; this.rot = 0;
+        this.x = lanes[Math.floor(Math.random() * lanes.length)]; this.y = SPAWN_Y; this.rot = 0;
     }
     update() { this.y += speed * 0.08; this.rot += 0.05; }
     get wx() { return wx(this.x); }
@@ -517,6 +742,8 @@ function parseColor(c) {
 }
 
 function restartGame() {
+    /* the engine was muted at the last flag — bring it back for the new race */
+    if(engineGain) engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime);
     player = new Player();
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = 0; bullets = 0; crashStun = 0;
@@ -550,8 +777,9 @@ function endRaceDuration() {
     let myKM = (score / 1000).toFixed(2);
     document.getElementById('final-score-lbl').innerText = `YOUR FINAL SCORE: ${Math.floor(score)} (${myKM} KM)`;
     
-    if(isMultiplayer && isHost) {
+    if(isMultiplayer && isHost && !roomClosed) {
         database.ref('car_rooms/' + currentRoom).update({ status: "finished" });
+        scheduleRoomCleanup();
     }
     
     if(isMultiplayer) {
@@ -588,7 +816,7 @@ function backToLobby() {
     if(isMultiplayer) {
         // হোস্ট ক্লিক করলে পুরো রুমের স্ট্যাটাসই "waiting" এ চলে যাবে এবং বাকিরা রিয়েল-টাইম লবিতে ফেরত যাবে
         if(isHost) {
-            database.ref('car_rooms/' + currentRoom).update({ status: "waiting" });
+            closeRoomNow();
         } else {
             // নরমাল জয়েন করা প্লেয়াররা জাস্ট ওয়েটিং স্ক্রিন অন করবে (হোস্ট স্ট্যাটাস চেঞ্জ করা পর্যন্ত)
             document.getElementById('gameover-screen').classList.add('hidden');
@@ -681,8 +909,8 @@ function render() {
         brakeActive = brakeReq;
         
         // --- Nitro Speed set to 560 & Burn Rate set to 0.24 ---
-        if(isNitro) { targetSpeed = 560; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
-        else if (brakeReq) targetSpeed = 80; else targetSpeed = 210; 
+        if(isNitro) { targetSpeed = SPEED_NITRO; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
+        else if (brakeReq) targetSpeed = SPEED_BRAKE; else targetSpeed = SPEED_CRUISE; 
 
         /* a crash stops the car dead: no throttle, no nitro burn, 0 KMH on the
            clock for CRASH_STUN frames, then it accelerates away again */
@@ -692,7 +920,7 @@ function render() {
         score += (speed * 0.015);
         roadOffset += (speed * 0.08);
 
-        if(engineOsc) engineOsc.frequency.setValueAtTime(40 + (speed/270)*140, audioCtx.currentTime);
+        if(engineOsc) engineOsc.frequency.setValueAtTime(40 + (speed/200)*140, audioCtx.currentTime);
 
         document.getElementById('score-txt').innerText = String(Math.floor(score)).padStart(5, '0');
         document.getElementById('speed-txt').innerText = `${Math.floor(speed)} KMH`;
@@ -743,7 +971,7 @@ function render() {
     }
     if(world) world.syncParticles(particles);
 
-    if(gameActive && Math.random() < 0.015 && stars.length < 2) stars.push(new Star());
+    if(gameActive && Math.random() < 0.015 && stars.length < 2) stars.push(new Star());   // stars share the far spawn
     for(let i = stars.length - 1; i >= 0; i--) {
         stars[i].update();
         if(gameActive && player && Math.abs(player.x + player.w/2 - stars[i].x) < player.w/2 + stars[i].r && Math.abs(player.y + player.h/2 - stars[i].y) < player.h/2 + stars[i].r) {
@@ -755,7 +983,7 @@ function render() {
     }
     if(world) world.syncStars(stars, roadOffset);
 
-    if(gameActive && Math.random() < 0.038 && enemies.length < 5) enemies.push(new Enemy());
+    if(gameActive && Math.random() < 0.075 && enemies.length < MAX_ENEMIES && canSpawn(enemies)) enemies.push(new Enemy());
     for(let i = enemies.length - 1; i >= 0; i--) {
         enemies[i].update();
         if(gameActive && player && !ghostActive && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
@@ -802,7 +1030,7 @@ const flashEl = document.getElementById('flash');
    have to live on window now that this file is an ES module */
 Object.assign(window, {
     createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby,
-    useGhost, useNuke, shootBullet
+    useGhost, useNuke, shootBullet, findRandomGame, cancelSearch
 });
 
 player = new Player();
