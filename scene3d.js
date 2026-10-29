@@ -38,16 +38,14 @@ const ROAD_SEGS = 150;              // the tarmac is a ribbon this many quads lo
  *  view of the road, not a change to how it is driven.
  * ------------------------------------------------------------------ */
 const CURVE_BANDS = [
-    { wave: 2600, amp: 125 },       // long sweepers
-    { wave: 1250, amp: 64 },        // the bends you actually steer for
+    { wave: 2600, amp: 420 },       // long sweepers
+    { wave: 1250, amp: 110 },       // the bends you actually steer for
     { wave: 620, amp: 20 }          // ripple, so it is never a plain arc
 ];
-/* The road leaves the car dead straight and only starts bending from here.
-   Without it the tarmac slid out from under the car on every bend, which
-   read as the car being swept sideways: the near road has to belong to the
-   car before it is allowed to wander off. */
-const CURVE_RAMP = 700;
 const CURVE = CURVE_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
+/* bumped every time the bends are re-seeded, so anything caching a position
+   on the old road knows to measure itself again */
+let CURVE_GEN = 0;
 function mulberry32(a) {
     return function () {
         a = a + 0x6D2B79F5 | 0;
@@ -65,6 +63,7 @@ export function reseedCurves(seed) {
         CURVE[i].amp = b.amp * (0.55 + rnd() * 0.90);
         CURVE[i].phase = rnd() * Math.PI * 2;
     });
+    CURVE_GEN++;            // a new race is a new road: drop any stale cache
 }
 reseedCurves();
 /* lateral offset of the road centre at absolute distance S along it */
@@ -168,9 +167,10 @@ export class World {
         this.color = new THREE.Color();
         this.roadOffset = 0;            // distance travelled, set by scrollRoad
         this._playerZ = 0;              // where the car sits, set by setPlayer
-        /* the road's offset under the car, cached once a frame: everything
-           else is measured from it, and it is asked for hundreds of times */
-        this._centre0 = centreAt(NEAR_Z);
+        /* the road's position and heading under the car, cached once a frame:
+           everything else is measured from it, and it is asked for hundreds
+           of times */
+        this._syncCurve();
         this.resize();
         this._shapeRoad();            // a sane road before the first scroll
     }
@@ -644,24 +644,36 @@ export class World {
      * ---------------------------------------------------------------- */
     /* ---- where the road is, relative to the car ---- */
     roadSAt(z) { return this.roadOffset + NEAR_Z - z; }      // absolute distance at world z
-    /* how far the road has swung sideways at z, measured from under the car */
-    bendAt(z) {
-        /* re-derive the offset if the road or the car has moved since the
-           last time it was asked for, so it can never go stale */
-        if (this._c0off !== this.roadOffset || this._c0z !== this._playerZ) {
-            this._c0off = this.roadOffset; this._c0z = this._playerZ;
-            this._centre0 = centreAt(this.roadOffset + NEAR_Z - this._playerZ);
-        }
-        const raw = centreAt(this.roadSAt(z)) - this._centre0;
-        const d = Math.abs(this._playerZ - z);            // how far up the road
-        return raw * Math.min(1, d / CURVE_RAMP);
+    /* where the road is under the car's own wheels, and which way it points
+       there. Everything is measured against this rather than the world axes,
+       because the camera rides with the car. */
+    _syncCurve() {
+        if (this._c0off === this.roadOffset && this._c0z === this._playerZ &&
+            this._cgen === CURVE_GEN) return;
+        this._c0off = this.roadOffset; this._c0z = this._playerZ; this._cgen = CURVE_GEN;
+        this._s0 = this.roadOffset + NEAR_Z - this._playerZ;
+        this._centre0 = centreAt(this._s0);
+        this._slope0 = slopeAt(this._s0);
     }
-    /* heading a car sitting at z would need to point along the road. Taken
-       from the bend itself rather than the raw slope, so it honours the ramp
-       and is zero under the car. */
+    /* how far the road has swung sideways at z, as the camera sees it.
+       The car is pointing where the road points under its own wheels, so the
+       road's heading at the car has to come off first: what is left is the
+       curvature ahead of you, which is what a driver actually sees. Take a
+       constant-curvature bend and this leaves d*d/2R — the bend starts under
+       the car and opens up ahead, instead of the tarmac running away
+       sideways underneath it. That sideways run was what made the car look
+       like it was being swept the other way round the corner. */
+    bendAt(z) {
+        this._syncCurve();
+        const d = this.roadOffset + NEAR_Z - z - this._s0;   // how far up the road
+        return (centreAt(this.roadSAt(z)) - this._centre0 - d * this._slope0) /
+               Math.sqrt(1 + this._slope0 * this._slope0);
+    }
+    /* which way the road points at z, relative to the way you are facing.
+       Zero under your own wheels, and the whole bend beyond that. */
     curveYawAt(z) {
-        const h = 30;
-        return Math.atan((this.bendAt(z + h) - this.bendAt(z - h)) / (2 * h));
+        this._syncCurve();
+        return Math.atan(slopeAt(this.roadSAt(z))) - Math.atan(this._slope0);
     }
 
     /* rebuild the tarmac, the barriers and their glow along the current bend */
@@ -695,7 +707,7 @@ export class World {
 
     scrollRoad(roadOffset) {
         this.roadOffset = roadOffset;
-        this._centre0 = centreAt(roadOffset + NEAR_Z - this._playerZ);
+        this._syncCurve();
         this.asphalt.offset.y = roadOffset / 230;
         this._shapeRoad();
         const d = this.dummy;

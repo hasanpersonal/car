@@ -142,7 +142,11 @@ console.log('\n=== the road bends ===');
             w.scrollRoad(seed * 613 + step * 3700);
             w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
             w.camera.updateMatrixWorld(true);
-            worstYaw = Math.max(worstYaw, Math.abs(w.curveYawAt(0)) * 180 / Math.PI);
+            /* how far the road has turned away from you by the time it is up
+               there: the heading under the car is zero by construction, it is
+               the bend ahead that decides whether this is a sweeper or a
+               hairpin */
+            worstYaw = Math.max(worstYaw, Math.abs(w.curveYawAt(-2000)) * 180 / Math.PI);
             for (const d of [400, 900, 1800, 3200, 5600]) {
                 const c = w.bendAt(-d);
                 worstShift = Math.max(worstShift, Math.abs(c));
@@ -156,7 +160,8 @@ console.log('\n=== the road bends ===');
     }
     console.log(`  worst heading ${worstYaw.toFixed(1)}deg, worst swing ${worstShift.toFixed(0)} units, ${offScreen} edges off screen`);
     ok(offScreen === 0, 'no bend, on any seed, throws the road off the side of the screen');
-    ok(worstYaw < 30, `the bends stay driveable, not hairpins (worst heading ${worstYaw.toFixed(1)}deg)`);
+    ok(worstYaw < 30, `the bends stay driveable, not hairpins (worst turn ${worstYaw.toFixed(1)}deg by 2000u up the road)`);
+    ok(worstYaw > 4, `and they are real bends, not a straight road (${worstYaw.toFixed(1)}deg of turn 2000u up)`);
 
     /* the car, the traffic and the furniture all sit on the bend */
     reseedCurves(CURVE_SEED);
@@ -179,10 +184,14 @@ console.log('\n=== the road bends ===');
     }
     ok(carOff < 1 && camSwing < 0.01,
        `and it stays centred while the road snakes: worst drift ${carOff.toFixed(1)}px, camera swing ${camSwing.toFixed(2)}deg`);
-    /* the real complaint: the road used to slide out from under the car, so
-       the car looked like it was being swept the other way. The road has to
-       leave the car straight, and the car has to still be over it up ahead. */
-    let nearBend = 0, notOverRoad = 0;
+    /* The road has to belong to the car: it passes under the wheels, and it
+       points the way the car does -- take the road's own heading out of it and
+       what is left is the bend ahead. Get that wrong and the tarmac runs away
+       sideways underneath you, which is what read as the car being swept the
+       other way round the corner. Get it too right and you have a straight
+       road again, so the bend up ahead is measured too. */
+    let nearBend = 0, notOverRoad = 0, crab = 0;
+    const bend2000 = [];
     for (let seed = 0; seed < 40; seed++) {
         reseedCurves(seed);
         for (let step = 0; step < 10; step++) {
@@ -190,6 +199,8 @@ console.log('\n=== the road bends ===');
             w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
             w.camera.updateMatrixWorld(true);
             nearBend = Math.max(nearBend, Math.abs(w.bendAt(-250)));
+            crab = Math.max(crab, Math.abs(w.curveYawAt(0)));
+            bend2000.push(Math.abs(w.bendAt(-2000)));
             for (const d of [600, 1000, 1500]) {
                 const c = w.bendAt(-d);
                 const l = new THREE.Vector3(c - 220, 0, -d).project(w.camera);
@@ -199,8 +210,11 @@ console.log('\n=== the road bends ===');
             }
         }
     }
-    ok(nearBend < 30, `the road leaves the car straight: ${nearBend.toFixed(0)} units of bend 250u up the road`);
-    ok(notOverRoad <= 2, `and the car is still on the road up ahead (${notOverRoad}/1200 samples off the tarmac)`);
+    const midBend = bend2000.sort((a, b) => a - b)[Math.floor(bend2000.length / 2)];
+    ok(nearBend < 30, `the road passes under the car: ${nearBend.toFixed(0)} units of bend 250u up the road`);
+    ok(crab < 0.01, `and points the way the car is going: ${(crab * 180 / Math.PI).toFixed(2)}deg of crab under the wheels`);
+    ok(midBend > 60, `but it is still a real curving road: the centre is ${midBend.toFixed(0)} units off, 2000u up`);
+    ok(notOverRoad <= 5, `and the car is still on the tarmac up ahead (${notOverRoad}/1200 samples off it)`);
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
@@ -210,7 +224,7 @@ console.log('\n=== the road bends ===');
     const kp = new THREE.Vector3().setFromMatrixPosition(kerb);
     /* instance matrices are float32, so allow a fraction of a unit */
     ok(Math.abs(kp.x - (-214 + w.bendAt(kp.z))) < 0.02,
-       `and so does the road furniture (a kerb 1500u out sits ${kp.x.toFixed(1)} units over, matching the bend)`);
+       `and so does the road furniture (a kerb ${(-kp.z).toFixed(0)}u out sits ${w.bendAt(kp.z).toFixed(0)} units over, matching the bend)`);
     reseedCurves(CURVE_SEED);
 }
 
