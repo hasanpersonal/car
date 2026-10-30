@@ -12,6 +12,7 @@
     <link rel="stylesheet" href="src/css/lobby-extras.css">
     <link rel="stylesheet" href="src/css/responsive.css">
     <link rel="stylesheet" href="src/css/rotate-lock.css">
+    <link rel="stylesheet" href="src/css/opening.css">
 </head>
 <body>
 
@@ -64,41 +65,55 @@
                 <div id="skill-btn-nuke" class="ctrl-btn skill-btn nuke empty"><div class="btn-title">NUKE</div><div class="btn-sub">5 AMMO</div></div>
             </div>
             <div id="pedal-row">
-                <div id="btn-boost" class="pedal pedal-boost empty"><div class="pedal-hinge"></div><div class="pedal-face"><span class="btn-title">BOOST</span><span class="btn-sub">0%</span></div></div>
                 <div id="btn-brake" class="pedal pedal-brake"><div class="pedal-hinge"></div><div class="pedal-face"><span class="btn-title">BRAKE</span></div></div>
+                <div id="btn-boost" class="pedal pedal-boost empty"><div class="pedal-hinge"></div><div class="pedal-face"><span class="btn-title">BOOST</span><span class="btn-sub">0%</span></div></div>
             </div>
         </div>
 
         <div id="start-screen" class="overlay">
-            <h1>NEON DRIVE</h1>
-            <div class="subtitle">MULTIPLAYER EDITION</div>
-            
-            <div class="lobby-box quick-match">
-                <div class="slot-title">⚡ QUICK MATCH</div>
-                <input type="text" id="random-name" class="lobby-input" placeholder="Enter Your Name" autocomplete="off">
-                <button class="btn-main btn-random" id="btn-find-random" onclick="findRandomGame()">⚡ FIND RANDOM PLAYER</button>
-                <div id="search-status" class="search-status"></div>
-            </div>
+            <div class="start-layout">
+                <header class="start-brand">
+                    <div class="brand-kicker"><span></span> THE NIGHT IS YOURS</div>
+                    <h1>NEON <span>DRIVE</span></h1>
+                    <div class="brand-subtitle">MULTIPLAYER RACING</div>
+                    <p class="brand-description">Pick your race.<br>Own the road.</p>
+                    <button class="btn-small solo-button" type="button" onclick="playSolo()"><span class="solo-icon">▶</span> PLAY SOLO PRACTICE</button>
+                    <div class="brand-note">SOLO PRACTICE <span>·</span> MULTIPLAYER</div>
+                </header>
 
-            <div class="subtitle" style="margin: 5px 0;">- OR -</div>
-
-            <div class="lobby-box">
-                <div class="slot-title">CREATE A NEW RACE</div>
-                <input type="text" id="host-name" class="lobby-input" placeholder="Enter Host Name" autocomplete="off">
-                <button class="btn-main" onclick="createRoom()">CREATE ROOM</button>
+                <main class="start-content">
+                    <div class="start-heading">
+                        <div><div class="section-kicker">READY WHEN YOU ARE</div><h2>CHOOSE YOUR RACE</h2></div>
+                        <span class="heading-mark" aria-hidden="true">01 / 03</span>
+                    </div>
+                    <div class="start-cards">
+                        <section class="lobby-box race-card quick-match">
+                            <div class="card-number">01 <span> / MATCHMAKING</span></div>
+                            <div class="slot-title">⚡ QUICK MATCH</div>
+                            <p class="card-description">Find a driver and race.</p>
+                            <input type="text" id="random-name" class="lobby-input" placeholder="Your name" aria-label="Your name for quick match" autocomplete="off">
+                            <button class="btn-main btn-random" id="btn-find-random" onclick="findRandomGame()">FIND PLAYER <span aria-hidden="true">↗</span></button>
+                            <div id="search-status" class="search-status" aria-live="polite"></div>
+                        </section>
+                        <section class="lobby-box race-card create-card">
+                            <div class="card-number">02 <span> / HOST</span></div>
+                            <div class="slot-title">CREATE A RACE</div>
+                            <p class="card-description">Start a room for friends.</p>
+                            <input type="text" id="host-name" class="lobby-input" placeholder="Host name" aria-label="Host name" autocomplete="off">
+                            <button class="btn-main" onclick="createRoom()">CREATE ROOM <span aria-hidden="true">↗</span></button>
+                        </section>
+                        <section class="lobby-box race-card join-card">
+                            <div class="card-number">03 <span> / JOIN</span></div>
+                            <div class="slot-title">JOIN A RACE</div>
+                            <p class="card-description">Have a code? Jump in.</p>
+                            <input type="text" id="joiner-name" class="lobby-input" placeholder="Your name" aria-label="Player name" autocomplete="off">
+                            <input type="text" id="room-code-input" class="lobby-input room-code" placeholder="4-digit room code" aria-label="4-digit room code" autocomplete="off">
+                            <button class="btn-main btn-join" onclick="joinRoom()">JOIN ROOM <span aria-hidden="true">↗</span></button>
+                        </section>
+                    </div>
+                    <footer class="start-footer"><span>NEON DRIVE <b> / </b> MULTIPLAYER EDITION</span><span>designed by imrul hasan, credit: Arena Agent</span></footer>
+                </main>
             </div>
-            
-            <div class="subtitle" style="margin: 5px 0;">- OR -</div>
-            
-            <div class="lobby-box">
-                <div class="slot-title">JOIN EXISTING RACE</div>
-                <input type="text" id="joiner-name" class="lobby-input" placeholder="Enter Player Name" autocomplete="off">
-                <input type="text" id="room-code-input" class="lobby-input" placeholder="4-Digit Room Code" autocomplete="off" style="margin-top: 8px;">
-                <button class="btn-main btn-join" onclick="joinRoom()">JOIN ROOM</button>
-            </div>
-            
-            <button class="btn-small" onclick="playSolo()" style="margin-top: 10px;">Play Solo Practice</button>
-            <div class="page-footer">was designed by imrul hasan, credit: Arena Agent</div>
         </div>
 
         <div id="waiting-screen" class="overlay hidden">

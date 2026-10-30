@@ -353,8 +353,21 @@ for (const [W, H, label] of [[844, 390, 'iPhone landscape'], [740, 360, 'Android
 const landL = layout(844, 390);
 ok(landL.brakeW > landL.boostW, 'BRAKE is the wider pedal, the way it is in a real car');
 /* left pedal first, whichever way round they are */
-ok(/id="pedal-row"[\s\S]*?id="btn-boost"[\s\S]*?id="btn-brake"/.test(htmlSrc),
-   'BOOST sits on the left of the pair, BRAKE on the right');
+ok(/id="pedal-row"[\s\S]*?id="btn-brake"[\s\S]*?id="btn-boost"/.test(htmlSrc),
+   'BRAKE sits on the left of the pair, BOOST on the right');
+
+/* =================================================================== */
+console.log('\n=== landscape opening screen ===');
+const opening = htmlSrc.match(/<div id="start-screen"[\s\S]*?(?=<div id="waiting-screen")/)[0];
+ok(/class="start-layout"/.test(opening) && /class="start-cards"/.test(opening) &&
+   /grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/.test(cssSrc),
+   'the opening screen uses a landscape-friendly three-card race selector');
+ok(['random-name', 'host-name', 'joiner-name', 'room-code-input', 'search-status'].every(id => opening.includes(`id="${id}"`)) &&
+   ['findRandomGame()', 'createRoom()', 'joinRoom()', 'playSolo()'].every(action => opening.includes(`onclick="${action}"`)),
+   'quick match, private rooms, search feedback and solo keep their existing bindings');
+ok(/#start-screen\.hidden\s*\{\s*display:\s*none/.test(cssSrc) &&
+   /#start-screen\s*\{[^}]*overflow-y:\s*auto/.test(cssSrc) && /#start-screen\s*\{[^}]*touch-action:\s*pan-y/.test(cssSrc),
+   'the opening screen hides during racing and remains scrollable on short screens');
 
 /* =================================================================== */
 console.log('\n=== steering wheel, pedals, abilities ===');
@@ -362,9 +375,9 @@ ok(/id="wheel-zone"[\s\S]*id="wheel-rim"[\s\S]*wheel-hub/.test(htmlSrc), 'a real
 ok(!/joystick/.test(htmlSrc) && !/joystick/.test(src), 'the floating stick is gone');
 const abilities = (htmlSrc.match(/id="ability-row"[\s\S]*?<\/div>\s*<div id="pedal-row"/) || [''])[0];
 ok(/shoot-btn[\s\S]*skill-btn-ghost[\s\S]*skill-btn-nuke/.test(abilities), 'SHOOT, GHOST and NUKE sit above the pedals');
-ok(/id="pedal-row"[\s\S]*btn-boost[\s\S]*btn-brake/.test(htmlSrc), 'BOOST and BRAKE are side by side below them');
-ok(/\.pedal-boost\s*\{[^}]*order:\s*1/.test(cssSrc) && /\.pedal-brake\s*\{[^}]*order:\s*2/.test(cssSrc),
-   'and BOOST is pinned to the left of BRAKE, in CSS as well as in the markup');
+ok(/id="pedal-row"[\s\S]*btn-brake[\s\S]*btn-boost/.test(htmlSrc), 'BRAKE and BOOST are side by side below them');
+ok(/\.pedal-brake\s*\{[^}]*order:\s*1/.test(cssSrc) && /\.pedal-boost\s*\{[^}]*order:\s*2/.test(cssSrc),
+   'and BRAKE is pinned to the left of BOOST, in CSS as well as in the markup');
 ok(/id="hud-left"[\s\S]*score-txt[\s\S]*speed-txt/.test(htmlSrc), 'SCORE and SPEED are top-left');
 ok(/id="hud-right"[\s\S]*timer-txt[\s\S]*nitro/.test(htmlSrc), 'TIME and NITRO are top-right');
 ok(!/hud-top/.test(htmlSrc) && !/hud-top/.test(cssSrc), 'nothing is left spanning the middle of the top edge');

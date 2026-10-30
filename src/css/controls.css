@@ -98,10 +98,10 @@
     -webkit-touch-callout: none; touch-action: none;
     height: clamp(54px, 15vmin, 96px);
 }
-/* BOOST is the left pedal and BRAKE the right, and the order is pinned here as
+/* BRAKE is the left pedal and BOOST the right, and the order is pinned here as
    well as in the markup so it cannot drift if the markup is ever reordered */
-.pedal-boost { width: clamp(64px, 17vmin, 124px); order: 1; }
-.pedal-brake { width: clamp(78px, 21vmin, 150px); order: 2; }
+.pedal-boost { width: clamp(64px, 17vmin, 124px); order: 2; }
+.pedal-brake { width: clamp(78px, 21vmin, 150px); order: 1; }
 .pedal-hinge {
     position: absolute; top: -3px; left: 14%; right: 14%; height: 6px; border-radius: 3px;
     background: linear-gradient(180deg, #6a748d, #232a3d); box-shadow: 0 1px 3px rgba(0,0,0,0.6);
