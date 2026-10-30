@@ -790,7 +790,17 @@ function useNuke() {
 /* Bullets used to be plain {x,y} objects, so the 3D renderer was fed
    undefined coordinates and drew them nowhere. Now they expose world space. */
 class Bullet {
-    constructor(x, y) { this.x = x; this.y = y; this.w = 6; this.h = 22; }
+    constructor(x, y) {
+        this.x = x; this.y = y; this.w = 6; this.h = 22;
+        /* A shot leaves along the car's course, not along the lane it was
+           fired from: across one unit of forward travel it crosses
+           (tan(course) - road slope) units of lane offset, which at the
+           bullet's 18 units a frame is its sideways pace. Fire while
+           angled across the road and the tracer goes where you point. */
+        const course = player ? (player.course || 0) : 0;
+        const slope = player ? (player.roadSlope || 0) : 0;
+        this.vx = Math.max(-12, Math.min(12, 18 * (Math.tan(course) - slope)));
+    }
     get wx() { return wx(this.x + this.w / 2); }
     get wz() { return wz(this.y + this.h / 2); }
 }
@@ -807,6 +817,25 @@ class Player {
         this.slip = 0;               // drift yaw (rad) when demand outruns grip
         this.pitch = 0; this.pitchV = 0;   // suspension spring-dampers
         this.roll = 0; this.rollV = 0;
+        /* The car is a vehicle in the world now, not a token on the road:
+           it has a heading of its own (radians, + = veering right of the
+           world's forward axis) that only yaw from the steering can change,
+           a course (where it is actually travelling, heading + tyre slip
+           angle beta), and it integrates along that course against the
+           road's own heading/slope at its station. Nothing aligns it to
+           the road — hold the wheel straight on a bend and it travels in
+           a straight world line across the lanes, like a real car. */
+        this.heading = null;         // set from the road on the first update
+        this.course = 0;             // heading + beta
+        this.beta = 0;               // tyre slip angle at the mass centre
+        this.yawRate = 0;            // rad/s, from the bicycle model below
+        this.roadHeading = 0;        // the track's heading under the car
+        this.roadSlope = 0;          // tan(roadHeading)
+        this.roadCurvature = 0;
+        this.stationSpeed = 0;       // KMH-equivalent progress along the road
+        this.lastQDelta = 0;         // road units of station gained last step
+        this.travel = 0;             // path distance, spins the wheels
+        this._snapCamera = true;     // first draw: no camera swoop from last race
     }
     update(step = 1) {
         const dt = step / 60;
@@ -822,24 +851,81 @@ class Player {
         const rack = (input - this.steer) * (1 - Math.pow(0.72, step));
         this.steer += Math.max(-0.14 * step, Math.min(0.14 * step, rack));
 
-        /* --- lateral grip: how much sideways pace the tyres can build.
-           A parked car cannot move sideways, authority ramps in with
-           speed, then tapers off when really fast so the car stays
-           stable instead of darty. Lateral acceleration is capped by
-           grip, and whatever demand the grip cannot meet shows up as
-           slip — the car yaws into the turn ahead of its travel. --- */
-        const ramp = Math.max(0, Math.min(1, speed / 55));
-        const taper = 1 - 0.22 * Math.max(0, Math.min(1, (speed - 190) / 230));
-        const desiredVX = this.steer * 10 * ramp * taper;
-        let dv = (desiredVX - this.vx) * (1 - Math.pow(1 - 0.24, step));
-        const maxLat = 2.6 * step;
-        dv = Math.max(-maxLat, Math.min(maxLat, dv));
-        this.vx += dv;
-        this.latAccel += ((dt > 0 ? dv / dt : 0) - this.latAccel) * (1 - Math.pow(0.65, step));
-        const slipTarget = -Math.max(-0.10, Math.min(0.10, (desiredVX - this.vx) * 0.008));
+        /* --- the vehicle itself: a kinematic bicycle with grip limits,
+           integrated in the road's station/lane-offset frame.
+           The road under the car has heading theta (slope = tan theta).
+           The car travels at v along its course. In road coordinates that
+           is exact geometry, no assists:
+             station rate  q' = v cos(course)
+             lane rate     d' = v (sin(course) - slope cos(course))
+           Steering changes the heading through yaw; with the wheel centred
+           the yaw dies away, the heading stays exactly where it was, and
+           the car runs in a straight world line — across the lane paint
+           if the road bends away, dead along its lane if it does not.
+           The driver, not the road, keeps it between the lines. --- */
+        const station0 = world ? world.roadSAt(wz(this.y + this.h / 2)) : roadOffset + 560;
+        if (this.heading === null) {
+            this.heading = world ? world.trackHeadingAtS(station0) : 0;
+            this.course = this.heading;
+        }
+        const v = speed * 4.8;                       // KMH -> road units/second
+        const WHEELBASE = 52;                        // the 3D car's axle span
+        /* front-wheel angle: big at parking pace, a few degrees at speed,
+           the way every real steering rack is geared */
+        const delta = this.steer * (0.48 / (1 + speed / 55));
+        /* yaw the geometry asks for, capped by what the tyres can hold:
+           lateral acceleration v*yawRate may not exceed the grip budget,
+           so past that the car understeers wide instead of spinning */
+        const rawYaw = v > 1 ? (v / WHEELBASE) * Math.tan(delta) : 0;
+        const gripYaw = v > 1 ? 1500 / v : 2.6;
+        const desiredYaw = Math.max(-gripYaw, Math.min(gripYaw, rawYaw));
+        /* yaw inertia: the nose answers hard but not instantly */
+        const yawRoom = 8 * dt;                      // max yaw accel, rad/s^2
+        this.yawRate += Math.max(-yawRoom, Math.min(yawRoom, desiredYaw - this.yawRate));
+        if (v <= 1) this.yawRate *= Math.pow(0.01, dt);   // parked: no yaw
+        /* slip angle at the mass centre: while cornering the car travels a
+           few degrees crabbed from where its nose points */
+        const betaTarget = v > 20 ? Math.max(-0.07, Math.min(0.07, Math.atan(0.45 * Math.tan(delta)))) : 0;
+        this.beta += (betaTarget - this.beta) * (1 - Math.exp(-dt / 0.09));
+        /* whatever yaw the grip refused shows up as visible slip */
+        const slipTarget = Math.max(-0.055, Math.min(0.055, (this.yawRate - rawYaw) * 0.035 - this.yawRate * 0.014));
         this.slip += (slipTarget - this.slip) * (1 - Math.pow(0.80, step));
-        this.x += this.vx * step;
-        this.angle = this.slip;
+        /* integrate heading and position against the road frame, substepped
+           to 60Hz so a slow phone steers the same arc as a fast one */
+        let d = wx(this.x + this.w / 2);
+        let qTravel = 0, dRate = 0;
+        const subs = Math.max(1, Math.ceil(step));
+        const h = dt / subs;
+        for (let i = 0; i < subs; i++) {
+            this.heading += this.yawRate * h;
+            this.course = this.heading + this.beta;
+            const S = station0 + qTravel;
+            this.roadHeading = world ? world.trackHeadingAtS(S) : 0;
+            this.roadSlope = Math.tan(this.roadHeading);
+            this.roadCurvature = world ? world.trackCurvatureAtS(S) : 0;
+            /* The endless track is only built forwards, so the car is kept
+               from ever pointing back the way it came: past ~49 degrees
+               across the road the tyres' aligning torque wins. Inside that
+               range nothing touches the heading but the driver. */
+            let rel = this.heading - this.roadHeading;
+            rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+            if (rel > 0.85) { this.heading = this.roadHeading + 0.85; this.yawRate = Math.min(this.yawRate, 0); }
+            else if (rel < -0.85) { this.heading = this.roadHeading - 0.85; this.yawRate = Math.max(this.yawRate, 0); }
+            this.course = this.heading + this.beta;
+            const cosC = Math.cos(this.course), sinC = Math.sin(this.course);
+            qTravel += v * cosC * h;
+            dRate = v * (sinC - this.roadSlope * cosC);
+            d += dRate * h;
+        }
+        this.lastQDelta = qTravel;
+        this.stationSpeed = dt > 0 ? (qTravel / dt) / 4.8 : 0;
+        this.travel += v * dt;
+        this.vx = dRate / 60;                        // per-60fps-frame, as before
+        this.x = d + gameWidth / 2 - this.w / 2;
+        this.angle = this.course - this.roadHeading;
+        /* body roll reads the real lateral load: v * yawRate */
+        const latNow = speed * this.yawRate;
+        this.latAccel += (latNow - this.latAccel) * (1 - Math.pow(0.65, step));
 
         /* --- body motion: pitch under power/brakes, roll in corners,
            each on its own stiff spring-damper so it settles with a
@@ -851,34 +937,33 @@ class Player {
         this.rollV += ((rollT - this.roll) * 120 - this.rollV * 12) * dt;
         this.roll += this.rollV * dt;
 
-        /* The car's place across the road is the driver's alone. This x is
-           measured from the road's own centreline (lanes, traffic and the
-           renderer's bend all share that frame), so holding the wheel
-           straight simply holds the car straight down the track — round
-           bends exactly as on straights, no sideways push from the road,
-           no drift toward the outside of a curve. The only things that
-           can move this car sideways are the steering above and the
-           barriers below. (An older version slid the car by however far
-           the centreline had moved under it each frame, which walked a
-           hands-off car into the barrier even on a straight and pushed
-           it against every bend. That is what read as the car turning
-           by itself, and it is gone.) */
         /* The barriers are solid: steering is yours alone, but the wall
            will stop you leaving the road -- at a cost, so sitting against it
-           is not a way to take a corner. Arrive at the wall already moving
-           sideways and it bounces you back off it like a real barrier;
-           merely lean on it and it just grinds the speed away. */
+           is not a way to take a corner. Arrive angled into it and the
+           impact knocks the car's course back toward the road with a
+           little bounce, the yaw rattled out of it; merely lean on it
+           and it just grinds the speed away. If you drift hands-off
+           across a bend this is where the drift ends. */
         const lo = 22, hi = gameWidth - 22 - this.w;
+        const knockBack = () => {
+            let rel = this.course - this.roadHeading;
+            rel = Math.atan2(Math.sin(rel), Math.cos(rel));
+            const bounced = this.roadHeading - rel * 0.18;   // mostly deadened
+            this.heading += bounced - this.course;
+            this.course = bounced;
+            this.yawRate *= 0.25;
+            this.beta *= 0.4;
+        };
         if(this.x < lo) {
             this.x = lo;
-            if(this.vx < -4.5) { this.vx = -this.vx * 0.22; speed *= 0.95; }
-            else if(this.vx < 0) this.vx = 0;
+            if(this.vx < -4.5) { knockBack(); this.vx = -this.vx * 0.22; speed *= 0.95; }
+            else if(this.vx < 0) { knockBack(); this.vx = 0; }
             this.scrape(step);
         }
         else if(this.x > hi) {
             this.x = hi;
-            if(this.vx > 4.5) { this.vx = -this.vx * 0.22; speed *= 0.95; }
-            else if(this.vx > 0) this.vx = 0;
+            if(this.vx > 4.5) { knockBack(); this.vx = -this.vx * 0.22; speed *= 0.95; }
+            else if(this.vx > 0) { knockBack(); this.vx = 0; }
             this.scrape(step);
         }
 
@@ -909,15 +994,22 @@ class Player {
     }
     draw(hidden) {
         if(!world) return;
+        if (this.heading === null) {           // menu car, before any update
+            this.heading = world.trackHeadingAtS(world.roadSAt(wz(this.y + this.h / 2)));
+            this.course = this.heading;
+        }
         world.setPlayer(wx(this.x + this.w / 2), wz(this.y + this.h / 2), {
             steer: Math.max(-1, Math.min(1, this.steer)),
+            heading: this.heading,
             slip: this.slip, pitch: this.pitch, roll: this.roll,
             speed01: Math.max(0, Math.min(1, speed / SPEED_NITRO)),
             brake: brakeActive ? 1 : 0,
             boost: isNitro ? 1 : 0,
-            phase: roadOffset,
+            phase: gameActive ? this.travel : roadOffset,
+            snapCamera: this._snapCamera,
             hidden: !!hidden
         });
+        this._snapCamera = false;
     }
 }
 
@@ -966,7 +1058,10 @@ class Enemy {
         /* engines and brakes are finite here too */
         const dv = Math.max(-68 * dt, Math.min(26 * dt, targetV - this.v));
         this.v = Math.max(30, Math.min(78, this.v + dv));
-        this.y += (speed - this.v) * 0.08 * step;
+        /* closing speed is along the road: a player angled across the
+           lanes gains station slower than the speedo suggests */
+        const closing = (player && gameActive) ? player.stationSpeed : speed;
+        this.y += (closing - this.v) * 0.08 * step;
         this.travel += this.v * 0.08 * step;
 
         /* --- lane changes: only into a clear gap, eased over ~2s --- */
@@ -1017,7 +1112,12 @@ class Star {
         this.r = 18; const lanes = [50, 150, 250, 350, 420];
         this.x = lanes[Math.floor(Math.random() * lanes.length)]; this.y = SPAWN_Y; this.rot = 0;
     }
-    update(step = 1) { this.y += speed * 0.08 * step; this.rot += 0.05 * step; }
+    update(step = 1) {
+        /* the pickup is bolted to the road, so it approaches at the car's
+           along-road (station) speed, not its raw speed */
+        const closing = (player && gameActive) ? player.stationSpeed : speed;
+        this.y += closing * 0.08 * step; this.rot += 0.05 * step;
+    }
     get wx() { return wx(this.x); }
     get wz() { return wz(this.y); }
 }
@@ -1256,8 +1356,13 @@ function render(ts) {
             lonAccel = longitudinalAccel(speed, targetSpeed, isNitro, brakeReq, grade, scrub);
             speed = Math.max(0, speed + lonAccel * (physStep / 60));
         }
+        /* the vehicle integrates against the road frame at the current
+           offset, and the road then advances by exactly the station the
+           car gained — full speed down the lane, less when angled across
+           it, nothing at all from the road's shape on its own */
+        if(player) player.update(physStep);
         score += (speed * 0.015) * physStep;
-        roadOffset += (speed * 0.08) * physStep;
+        roadOffset += player ? player.lastQDelta : (speed * 0.08) * physStep;
 
         /* the note follows the speed: revs climb, the rasp tracks an octave up
            and the filter opens, so accelerating sounds like accelerating.
@@ -1309,7 +1414,7 @@ function render(ts) {
 
     /* ---- bullets: travel forward, kill traffic on contact ---- */
     for(let i = activeBullets.length - 1; i >= 0; i--) {
-        let b = activeBullets[i]; b.y -= 18 * physStep; let killed = false;
+        let b = activeBullets[i]; b.y -= 18 * physStep; b.x += (b.vx || 0) * physStep; let killed = false;
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
@@ -1374,7 +1479,7 @@ function render(ts) {
     }
 
     if(player) {
-        if(gameActive) player.update(physStep);
+        /* already integrated above, before the road scrolled */
         player.draw(playerHidden);
     }
 
@@ -1397,10 +1502,24 @@ const flashEl = document.getElementById('flash');
    left of the middle of the road. It is the one number that says whether you
    are still on the road, and the dev harness steers by it. */
 const carRoadOffset = () => player ? wx(player.x + player.w / 2) : 0;
+/* the vehicle's full driving state, for the dev harness: where it is
+   across the road, where it points, where it is actually travelling,
+   and what the road is doing underneath it */
+const carPhysicsState = () => player ? {
+    offset: carRoadOffset(),
+    heading: player.heading || 0,
+    course: player.course || 0,
+    yawRate: player.yawRate || 0,
+    roadHeading: player.roadHeading || 0,
+    roadCurvature: player.roadCurvature || 0,
+    station: world ? world.playerStation() : roadOffset + 560,
+    stationSpeed: player.stationSpeed || 0,
+    vx: player.vx || 0
+} : null;
 Object.assign(window, {
     createRoom, joinRoom, playSolo, sendChatMessage, startMultiplayerGame, backToLobby,
     useGhost, useNuke, shootBullet, findRandomGame, cancelSearch, checkOrientation,
-    wheelSetAngle, carRoadOffset
+    wheelSetAngle, carRoadOffset, carPhysicsState
 });
 
 player = new Player();

@@ -45,19 +45,25 @@ World.prototype.setPlayer = function (x, z, o) { livePlayerX = x; return origSet
 
 const EXPORTS = ['findRandomGame','cancelSearch','playSolo','useGhost','useNuke','shootBullet',
                  'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby',
-                 'checkOrientation','wheelSetAngle','carRoadOffset'];
+                 'checkOrientation','wheelSetAngle','carRoadOffset','carPhysicsState'];
 const grab = () => Object.fromEntries(EXPORTS.map(k => [k, globalThis.window[k]]));
 await import('../script.js');
 const A = grab();
 
 const fire = () => { const cb = rafCb; rafCb = null; if (cb) cb(0); };
-/* A frame with a driver in it: keeps the car centred the way a player
-   would after the tests above have thrown it around, so the speed
-   measurements read clean cruising rather than barrier scrapes. */
-const drive = (n = 1) => { for (let i = 0; i < n; i++) {
-    window.wheelSetAngle(Math.max(-120, Math.min(120, -window.carRoadOffset() * 3.6)));
-    fire();
-} };
+/* A frame with a driver in it. The car has a heading of its own now and
+   does not follow the road, so the driver has to drive like a human:
+   aim the course at the road's heading, corrected toward the middle,
+   and damp the yaw. Anything less ends in the barrier — which is the
+   point of the physics, but makes every speed measurement a lie. */
+const aimWheel = () => {
+    const s = window.carPhysicsState();
+    if (!s) return;
+    const want = s.roadHeading + Math.max(-0.30, Math.min(0.30, -s.offset * 0.0035));
+    const err = Math.atan2(Math.sin(want - s.course), Math.cos(want - s.course));
+    window.wheelSetAngle(Math.max(-120, Math.min(120, err * 260 - s.yawRate * 38)));
+};
+const drive = (n = 1) => { for (let i = 0; i < n; i++) { aimWheel(); fire(); } };
 const el = (id) => document.getElementById(id);
 const flush = async (n = 6) => { for (let i = 0; i < n; i++) await new Promise(r => setImmediate(r)); };
 const ammo = () => parseInt(document.querySelectorAll('.ammo-count')[0].innerText) || 0;
@@ -138,7 +144,7 @@ console.log('\n=== the road bends ===');
     ok(swing(run1) > 150, `it really does curve: the road ahead shifts ${swing(run1).toFixed(0)} units as you drive`);
     ok(run1.some(v => Math.abs(v) > 60), `and often leans well off centre (up to ${Math.max(...run1.map(Math.abs)).toFixed(0)} units)`);
     ok(run1.every((v, i) => Math.abs(v - run2[i]) > 1e-9), 'a different seed gives a different road');
-    ok(Math.abs(w.bendAt(0)) < 1e-9, 'but the tarmac under the car never moves, so the car cannot drift off it');
+    ok(Math.abs(w.bendAt(0)) < 1e-9, 'and the centreline still passes through the car\'s station (offset is measured from it)');
 
     /* every bend, on every seed, has to stay on screen */
     reseedCurves(CURVE_SEED);
@@ -173,24 +179,31 @@ console.log('\n=== the road bends ===');
     /* the car, the traffic and the furniture all sit on the bend */
     reseedCurves(CURVE_SEED);
     w.scrollRoad(12345);
-    w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+    w.setPlayer(0, 0, { steer: 0, heading: 0, brake: 0, boost: 0, phase: 0 });
     ok(Math.abs(w.playerCar.rotation.y) < 1e-9,
-       'the car is not turned by the bend: with no steering input it points dead ahead');
-    /* and the camera holds its line, so the car cannot slide about the screen */
+       'the car is not turned by the bend: it points where its own heading points');
+    w.setPlayer(0, 0, { steer: 0, heading: 0.3, brake: 0, boost: 0, phase: 0 });
+    ok(Math.abs(w.playerCar.rotation.y + 0.3) < 1e-9,
+       'and when the driver has turned it, the nose follows the driver, not the road');
+    /* The chase camera rides behind the car's heading, simulator-style:
+       hold the heading dead constant while the road snakes underneath on
+       seed after seed, and the camera must not swing with the road at
+       all — it stays true to the car's straight line. */
+    w.setPlayer(0, 0, { steer: 0, heading: 0.22, snapCamera: true, brake: 0, boost: 0, phase: 0 });
     let carOff = 0, camSwing = 0;
     for (let seed = 0; seed < 12; seed++) {
         reseedCurves(seed);
         for (let step = 0; step < 8; step++) {
             w.scrollRoad(seed * 811 + step * 3300);
-            w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+            w.setPlayer(0, 0, { steer: 0, heading: 0.22, brake: 0, boost: 0, phase: 0 });
             w.camera.updateMatrixWorld(true);
             const v = new THREE.Vector3(0, 21, 0).project(w.camera);
             carOff = Math.max(carOff, Math.abs((v.x + 1) / 2 * 844 - 422));
-            camSwing = Math.max(camSwing, Math.abs(w.camera.rotation.y) * 180 / Math.PI);
+            camSwing = Math.max(camSwing, Math.abs(w.camera.rotation.y + 0.22) * 180 / Math.PI);
         }
     }
-    ok(carOff < 1 && camSwing < 0.01,
-       `and it stays centred while the road snakes: worst drift ${carOff.toFixed(1)}px, camera swing ${camSwing.toFixed(2)}deg`);
+    ok(carOff < 1 && camSwing < 0.5,
+       `and the camera follows the car, not the road: worst drift ${carOff.toFixed(1)}px, camera error ${camSwing.toFixed(2)}deg`);
     /* The road has to belong to the car: it passes under the wheels, and it
        points the way the car does -- take the road's own heading out of it and
        what is left is the bend ahead. Get that wrong and the tarmac runs away
@@ -217,6 +230,8 @@ console.log('\n=== the road bends ===');
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
+    ok(Math.abs(w.enemyPool[0].car.rotation.y + w.trackHeadingAtS(w.roadSAt(-1500))) < 1e-9,
+       'and traffic points along the road there, nose exactly on the tangent');
     w.scrollRoad(12345);
     const kerb = new THREE.Matrix4();
     w.kerbs.getMatrixAt(0, kerb);
@@ -224,6 +239,24 @@ console.log('\n=== the road bends ===');
     /* instance matrices are float32, so allow a fraction of a unit */
     ok(Math.abs(kp.x - (-214 + w.bendAt(kp.z))) < 0.02,
        `and so does the road furniture (a kerb ${(-kp.z).toFixed(0)}u out sits ${w.bendAt(kp.z).toFixed(0)} units over, matching the bend)`);
+    /* The lane paint is fixed to the road surface: pick any dash, drive
+       37 units, and that same dash must still be at the same absolute
+       station in the same lane — it only moves because the car passes it,
+       never because the renderer slides it sideways. */
+    w.scrollRoad(21000);
+    const dm = new THREE.Matrix4();
+    let dashIdx = -1, dashS = 0, dashLane = 0;
+    for (let i = 0; i < w.dashes.count; i++) {
+        w.dashes.getMatrixAt(i, dm);
+        const p = new THREE.Vector3().setFromMatrixPosition(dm);
+        if (p.z < -1000 && p.z > -3000) { dashIdx = i; dashS = w.roadSAt(p.z); dashLane = p.x - w.bendAt(p.z); break; }
+    }
+    w.scrollRoad(21037);
+    w.dashes.getMatrixAt(dashIdx, dm);
+    const dp2 = new THREE.Vector3().setFromMatrixPosition(dm);
+    ok(dashIdx >= 0 && Math.abs(w.roadSAt(dp2.z) - dashS) < 0.05 &&
+       Math.abs((dp2.x - w.bendAt(dp2.z)) - dashLane) < 0.05,
+       'and the lane lines stay still on the road: a dash keeps its station and lane as you drive');
     reseedCurves(CURVE_SEED);
 }
 
@@ -348,13 +381,16 @@ for (let i = 0; i < 40; i++) { fire(); xRight = Math.max(xRight, livePlayerX); }
 const angleRight = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
 ok(angleRight > 10, `turning the rim right rotates the wheel clockwise (+${angleRight}deg)`);
 ok(xRight > xFromR + 20, `and the car follows (x ${xFromR.toFixed(0)} -> ${xRight.toFixed(0)})`);
-/* and the other way */
+/* and the other way — allowing real time for the turn to unwind: the car
+   is yawed hard right at this point, so it has to rotate back through
+   straight before it can travel left, the way a real car does */
 touchAt('touchmove', CX + 220, CY + 220);
 let xFromL = livePlayerX, xLeft = livePlayerX;
-for (let i = 0; i < 60; i++) { fire(); xLeft = Math.min(xLeft, livePlayerX); }
+const headFromL = window.carPhysicsState().heading;
+for (let i = 0; i < 180 && xLeft >= xFromL - 20; i++) { fire(); xLeft = Math.min(xLeft, livePlayerX); }
 const angleLeft = +(el('wheel-rim').style.transform.match(/rotate\((-?[\d.]+)deg\)/) || [])[1];
-ok(angleLeft < -10 && xLeft < xFromL - 20,
-   `and left steers left (${angleLeft}deg, x ${xFromL.toFixed(0)} -> ${xLeft.toFixed(0)})`);
+ok(angleLeft < -10 && xLeft < xFromL - 20 && window.carPhysicsState().heading < headFromL - 0.15,
+   `and left steers left (${angleLeft}deg, x ${xFromL.toFixed(0)} -> ${xLeft.toFixed(0)}, heading swung ${((window.carPhysicsState().heading - headFromL) * 180 / Math.PI).toFixed(0)}deg)`);
 /* let go: it springs back to centre */
 zone.fire('touchend', { touches: [] });
 for (let i = 0; i < 90; i++) fire();
@@ -708,7 +744,7 @@ console.log('\n=== hills, banking and the roadside city ===');
         for (let s = 0; s < 6; s++) {
             w.scrollRoad(seed * 613 + s * 3700);
             for (const z of [-600, -1400]) {
-                const yr = w.curveYawAt(z - 60) - w.curveYawAt(z + 60);
+                const yr = w.trackHeadingAtS(w.roadSAt(z - 60)) - w.trackHeadingAtS(w.roadSAt(z + 60));
                 const b = w.bankSlopeAt(z);
                 if (Math.abs(yr) > 0.004 && Math.abs(b) > 0.01) { checked++; if (Math.sign(b) === -Math.sign(yr)) right++; }
             }
@@ -770,7 +806,7 @@ const burst = (frames, ms) => {
     window.playSolo();
     let t = burst.t || 1000;
     for (let i = 0; i < frames; i++) {
-        window.wheelSetAngle(Math.max(-120, Math.min(120, -window.carRoadOffset() * 3.6)));
+        aimWheel();
         const cb = rafCb; rafCb = null; t += ms; if (cb) cb(t);
     }
     burst.t = t;
@@ -784,27 +820,83 @@ ok(at60 > 120 && Math.abs(at120 - at60) < at60 * 0.14 && Math.abs(at30 - at60) <
    'a 120Hz phone no longer runs the game at double speed');
 
 /* =================================================================== */
-console.log('\n=== hands off the wheel, the car simply goes straight ===');
-/* Regression lock for the auto-turn bug: the player update used to slide
-   the car sideways by however far the road centreline had moved under
-   it each frame, so a hands-off car drifted to the barrier on straights
-   and was pushed against every bend. Now nothing but steering (and the
-   barriers) may move the car across the road. */
-window.playSolo();
-let maxOff = 0;
-for (let i = 0; i < 900; i++) { fire(); maxOff = Math.max(maxOff, Math.abs(window.carRoadOffset())); }
-console.log(`  900 frames, no steering input at all: worst offset ${maxOff.toFixed(2)} units`);
-ok(maxOff < 2, 'no steering, no wandering: the car holds the middle on straights and bends alike');
-window.playSolo();
-for (let i = 0; i < 30; i++) { window.wheelSetAngle(72); fire(); }   // steer out to a lane
-window.wheelSetAngle(0);
-for (let i = 0; i < 40; i++) fire();                                  // let the slide settle
-const laneOff = window.carRoadOffset();
-let laneDrift = 0;
-for (let i = 0; i < 900; i++) { fire(); laneDrift = Math.max(laneDrift, Math.abs(window.carRoadOffset() - laneOff)); }
-console.log(`  steered to offset ${laneOff.toFixed(0)}, then 900 hands-off frames drifted ${laneDrift.toFixed(2)}`);
-ok(Math.abs(laneOff) > 40, 'steered out of the middle first, so the lane-hold is meaningful');
-ok(laneDrift < 3, 'and it holds that exact lane through whatever the road does next');
+console.log('\n=== a real car: straight means straight, bends do not carry you ===');
+/* The simulator contract, locked both ways:
+   - where the road runs straight, a hands-off car holds its lane; and
+   - where the road bends, a hands-off car keeps its WORLD heading and
+     travels in a straight line across the lanes — the road turns away
+     under it, exactly as in Vice City or any car simulator. Only the
+     steering (and the barriers, at the very end of the drift) may ever
+     change the heading. The old suite asserted the opposite — that the
+     car was glued to its lane through bends — which is precisely the
+     on-rails feel this replaces. Seeds are chosen from the geometry at
+     the car's current station, so the stretches are real. */
+{
+    const wScan = new World(env.gameCanvas); wScan.renderer.render = () => {};
+    const predict = (S0, dist) => {            // hands-off drift, geometry alone
+        const psi = wScan.trackHeadingAtS(S0);
+        let dd = 0, hMin = 1e9, hMax = -1e9;
+        for (let q = 0; q < dist; q += 25) dd += (Math.tan(psi) - wScan.trackSlopeAtS(S0 + q)) * 25;
+        for (let q = 0; q < dist; q += 100) {
+            const hh = wScan.trackHeadingAtS(S0 + q);
+            hMin = Math.min(hMin, hh); hMax = Math.max(hMax, hh);
+        }
+        return { drift: dd, swing: hMax - hMin };
+    };
+    const findSeed = (test) => {
+        window.playSolo(); fire();                     // learn the station
+        const S0 = window.carPhysicsState().station;
+        for (let seed = 0; seed < 160; seed++) {
+            reseedCurves(seed);
+            const p = predict(S0, 5200);
+            if (test(p)) { window.playSolo(); reseedCurves(seed); return { seed, ...p }; }
+        }
+        return null;
+    };
+    const runHandsOff = (dist) => {
+        fire();
+        const s0 = window.carPhysicsState();
+        let maxOff = 0, headChange = 0, hMin = s0.roadHeading, hMax = s0.roadHeading, n = 0;
+        while (n++ < 2400) {
+            fire();
+            const s = window.carPhysicsState();
+            maxOff = Math.max(maxOff, Math.abs(s.offset));
+            headChange = Math.max(headChange, Math.abs(s.heading - s0.heading));
+            hMin = Math.min(hMin, s.roadHeading); hMax = Math.max(hMax, s.roadHeading);
+            if (s.station - s0.station >= dist) break;
+        }
+        return { end: window.carPhysicsState(), maxOff, headChange, swing: hMax - hMin };
+    };
+    /* --- the straight --- */
+    const flat = findSeed(p => Math.abs(p.drift) < 14 && p.swing * 180 / Math.PI < 1.6);
+    ok(!!flat, 'found a genuinely straight stretch of road to test on');
+    if (flat) {
+        const r = runHandsOff(4600);
+        console.log(`  straight: road heading wandered ${(r.swing * 180 / Math.PI).toFixed(2)}deg, car offset ended ${r.end.offset.toFixed(1)} (worst ${r.maxOff.toFixed(1)})`);
+        ok(r.headChange < 0.001, 'on a straight, hands off: the heading never moves a hair');
+        ok(r.maxOff < 25, 'and the car simply holds its lane — no wandering, no auto-turn');
+    }
+    /* --- the bend --- */
+    const bendy = findSeed(p => Math.abs(p.drift) > 110 && Math.abs(p.drift) < 165 && p.swing * 180 / Math.PI > 2.2);
+    ok(!!bendy, 'found a real bend to test on');
+    if (bendy) {
+        const r = runHandsOff(4800);
+        console.log(`  bend: road heading swung ${(r.swing * 180 / Math.PI).toFixed(2)}deg, car drifted to ${r.end.offset.toFixed(0)} across the lanes, heading change ${(r.headChange * 180 / Math.PI).toFixed(3)}deg`);
+        ok(r.headChange < 0.001, 'on a bend, hands off: the car still never turns itself');
+        ok(Math.abs(r.end.offset) > 45 && r.maxOff < 192,
+           'but it does not follow the road either — it runs straight and crosses the lanes until you steer');
+    }
+    /* --- and steering really is the thing that turns it --- */
+    window.playSolo();
+    drive(200);                                        // settle at cruise, centred
+    const before = window.carPhysicsState();
+    for (let i = 0; i < 40; i++) { window.wheelSetAngle(60); fire(); }
+    const turned = window.carPhysicsState();
+    ok((turned.heading - before.heading) * 180 / Math.PI > 3 && turned.offset > before.offset + 15,
+       `holding the wheel right yaws the car right (+${((turned.heading - before.heading) * 180 / Math.PI).toFixed(1)}deg) and it travels that way`);
+    drive(300);
+    ok(Math.abs(window.carRoadOffset()) < 45, 'and a driver who counter-steers brings it back to the middle');
+}
 
 console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
 process.exit(fail ? 1 : 0);

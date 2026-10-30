@@ -119,6 +119,15 @@ const elevAt = (S) =>
 const gradeAt = (S) =>
     ELEV[0].amp / ELEV[0].wave * Math.cos(S / ELEV[0].wave + ELEV[0].phase) +
     ELEV[1].amp / ELEV[1].wave * Math.cos(S / ELEV[1].wave + ELEV[1].phase);
+/* The track's own direction in mathematical (not three.js Euler) terms:
+   positive heading veers toward +x/right as distance increases. script.js
+   integrates the player's independent heading against this. Curvature is
+   d(heading)/d(arc length) for the centreline graph x = centreAt(S). */
+const trackHeadingAtS = (S) => Math.atan(slopeAt(S));
+const trackCurvatureAtS = (S) => {
+    const m = slopeAt(S);
+    return bendRateAt(S) / Math.pow(1 + m * m, 1.5);
+};
 /* stable per-index pseudo-random, so roadside furniture keeps its size
    and offset every frame while its position wraps down the road */
 const hash1 = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
@@ -323,6 +332,9 @@ export class World {
         this.color = new THREE.Color();
         this.roadOffset = 0;            // distance travelled, set by scrollRoad
         this._playerZ = 0;              // where the car sits, set by setPlayer
+        this._camHeading = undefined;   // chase-camera heading (smoothed car heading)
+        this._camAnchorX = undefined;   // chase-camera anchor, lagging the car a touch
+        this._camAnchorZ = undefined;
         /* the road's position and heading under the car, cached once a frame:
            everything else is measured from it, and it is asked for hundreds
            of times */
@@ -1065,23 +1077,31 @@ export class World {
        minus the centreline under the car, and nothing else. It is NOT measured
        against the car, so a car that is going straight does not stay on the
        road -- the road curves away beneath it and the driver has to answer
-       with the wheel. Measuring it against the car (which is what it used to
-       do) glued the car to the centreline: that was the car following the
-       lines with nobody steering. */
+       with the wheel. */
     bendAt(z) {
         this._syncCurve();
         return centreAt(this.roadSAt(z)) - this._centre0;
     }
-    /* which way the road points at z. The camera holds its line rather than
-       swinging along the bend, so this is simply the road's own heading. */
+    /* The track frame at an absolute station S. These are the numbers the
+       vehicle physics in script.js integrate against: the road has a heading
+       and curvature of its own, and the car has a separate heading that only
+       the steering can change. */
+    trackHeadingAtS(S) { return trackHeadingAtS(S); }
+    trackSlopeAtS(S) { return slopeAt(S); }
+    trackCurvatureAtS(S) { return trackCurvatureAtS(S); }
+    playerStation() { this._syncCurve(); return this._s0; }
+    /* Which way the road points at z, as a three.js Y rotation for an object
+       whose nose is -z. (That is the negative of the mathematical heading:
+       Ry(a) sends -z toward (-sin a, -cos a), so a road veering right needs
+       a negative a.) Dashes, kerbs, traffic and wrecks all align with this,
+       so the painted lines lie along the tarmac instead of across it. */
     curveYawAt(z) {
         this._syncCurve();
-        return Math.atan(slopeAt(this.roadSAt(z)));
+        return -trackHeadingAtS(this.roadSAt(z));
     }
     /* where the centreline is under the car, in absolute road units.
-       Kept for the dev harness: the game itself no longer pushes the
-       car around with it — the car's offset is measured from this
-       centreline, so it simply travels with the road. */
+       Kept for the dev harness. The game reads the track heading and
+       curvature above; it never slides the car by this number. */
     centreUnderCar() { this._syncCurve(); return this._centre0; }
 
     /* Road height at z, measured the same car-relative way as the bend:
@@ -1180,8 +1200,12 @@ export class World {
             return (((i * spacing + roadOffset) % total) + total) % total - total + NEAR_Z;
         };
 
-        /* lane dashes on the actual lane boundaries — midway between the
-           five lanes traffic drives in — laid over hill and bank */
+        /* Lane dashes on the actual lane boundaries — midway between the
+           five lanes traffic drives in — laid over hill and bank. The wrap
+           is written so each instance keeps one absolute station (roadSAt
+           of its z is constant as the offset advances) and one fixed lane
+           offset until it recycles far behind the car: the paint is fixed
+           to the road surface, and only the car's travel moves it past. */
         let n = 0;
         for (const x of [-128, -28, 72, 157])
             for (let i = 0; i < 36; i++) {
@@ -1251,6 +1275,7 @@ export class World {
         this.setPlayerLivery((opts.boost || 0) > 0.02);
         const car = this.playerCar;
         car.visible = true;
+        this._playerZ = z;
         /* the car sits on the surface: banked plane included, so out at
            the edge of a banked bend it rides up the banking with the road */
         car.position.set(x, this.roadYAt(z, x), z);
@@ -1258,20 +1283,20 @@ export class World {
         /* Full base pose every frame. rotation.x used to be touched only by the
            crash animation below, so every crash added its tumble to the last one
            and the car drove around permanently nose-up. */
-        /* Only the player's steering turns this car. It used to be yawed to
-           match the road as well, which looked like the car steering itself
-           into every bend; the driver is meant to do that. On top of the
-           steering sit the physics body motions script.js works out:
-           pitch as the nose rises under power and dives under braking,
-           roll as the body leans out of a corner, and slip yaw when the
-           tyres are sliding. The whole lot also rolls with the banking. */
+        /* The car points where its own heading points — the integral of its
+           yaw rate, which only the steering produces. It is never yawed to
+           match the road: on a bend with the wheel untouched the nose keeps
+           its world direction and the road turns away underneath, exactly
+           as in a driving simulator. On top of the heading sit the body
+           motions script.js works out: pitch under power/brakes, roll in
+           corners, and a touch of slip yaw when the tyres slide. */
+        const heading = Number.isFinite(opts.heading) ? opts.heading : 0;
         car.rotation.set(opts.pitch || 0,
-                         -(opts.steer || 0) * 0.10 + (opts.slip || 0),
+                         -heading + (opts.slip || 0),
                          Math.atan(this.bankSlopeAt(z)) + (opts.roll || 0));
         h.setBrake(opts.brake || 0);
         h.setBoost(opts.boost || 0);
         this._boost = opts.boost || 0;
-        this._playerZ = z;
         h.spinWheels(opts.phase, -(opts.steer || 0));
         if (opts.boost > 0.02) {
             const f = 0.75 + Math.random() * 0.5;
@@ -1307,26 +1332,47 @@ export class World {
         }
         const camYE = CAM.camY + this._speedK * 7;
         const camZE = CAM.camZ + this._speedK * 20;
+        /* ---- chase camera, simulator style: it rides behind the car's own
+           heading, with a little rotational lag so a flick of the wheel
+           yaws the car in the frame for a moment before the view settles
+           behind it. It is aimed along where the CAR points, never along
+           the road — in a bend with no steering input the view stays true
+           to the car's straight line and the road, lane paint and all,
+           swings away across the frame. That is what makes the paint read
+           as fixed to the world rather than glued under the car. ---- */
+        if (this._camHeading === undefined || opts.snapCamera) this._camHeading = heading;
+        else {
+            let dh = heading - this._camHeading;
+            dh = Math.atan2(Math.sin(dh), Math.cos(dh));   // shortest way round
+            this._camHeading += dh * (1 - Math.pow(0.80, this._step || 1));
+        }
+        const ch = this._camHeading;
+        const fX = Math.sin(ch), fZ = -Math.cos(ch);       // camera forward (x,z)
+        const rX = Math.cos(ch), rZ = Math.sin(ch);        // camera right (x,z)
         /* Follow by CAM.follow, but never let the car slide off the edge of a
            very narrow screen: clamp how far the car may sit from the camera
            axis to what the current aspect can actually show. */
         const halfExtent = Math.tan(fovEff * Math.PI / 360) * this.aspect * camZE;
         const limit = Math.max(0, halfExtent * 0.92 - CAR.W * 0.5 - 4);
-        const off = Math.max(-limit, Math.min(limit, x * (1 - CAM.follow)));
-        const cx = x - off;
+        const localRight = x * rX + z * rZ;
+        const off = Math.max(-limit, Math.min(limit, localRight * (1 - CAM.follow)));
+        const wantX = x - rX * off, wantZ = z - rZ * off;
         /* a breath of lag in the follow, so a quick lane change moves the
            car in the frame for a moment instead of the whole world sliding
            rigidly with it; it settles back to dead centre straight away */
-        this._camX = this._camX === undefined ? cx
-            : this._camX + (cx - this._camX) * (1 - Math.pow(0.78, this._step || 1));
-        const ccx = this._camX;
-        this.camera.position.set(ccx + this.camShake.x, camYE + this.camShake.y, z + camZE);
-        /* The camera sits on the car and holds its line: it is never aimed
-           down the bend, so the car runs dead centre and it is the road
-           that snakes across the screen, the way an arcade racer does.
-           Swinging the camera to follow the bend made the car slide about
-           and read as the car steering itself. */
-        this.camera.lookAt(ccx, CAM.lookY, z + CAM.lookZ);
+        if (this._camAnchorX === undefined || opts.snapCamera) {
+            this._camAnchorX = wantX; this._camAnchorZ = wantZ;
+        } else {
+            const lag = 1 - Math.pow(0.78, this._step || 1);
+            this._camAnchorX += (wantX - this._camAnchorX) * lag;
+            this._camAnchorZ += (wantZ - this._camAnchorZ) * lag;
+        }
+        const ax = this._camAnchorX, az = this._camAnchorZ;
+        this.camera.position.set(
+            ax - fX * camZE + rX * this.camShake.x,
+            camYE + this.camShake.y,
+            az - fZ * camZE + rZ * this.camShake.x);
+        this.camera.lookAt(ax - fX * CAM.lookZ, CAM.lookY, az - fZ * CAM.lookZ);
     }
 
     /* ---------------------------------------------------------------- */
@@ -1483,9 +1529,13 @@ export class World {
             }
             const car = slot.car;
             car.visible = true;
-            const gy = this.roadYAt(g.wz, g.wx - this.bendAt(g.wz));
-            car.position.set(g.wx, gy, g.wz);
-            car.rotation.set(this.pitchAt(g.wz), -(g.steer || 0) * 0.12, Math.atan(this.bankSlopeAt(g.wz)));
+            /* rivals sit on the same tarmac as everyone else: their wx is a
+               lane offset, so it takes the bend like traffic does */
+            const gx = g.wx + this.bendAt(g.wz);
+            const gy = this.roadYAt(g.wz, g.wx);
+            car.position.set(gx, gy, g.wz);
+            car.rotation.set(this.pitchAt(g.wz), -(g.steer || 0) * 0.12 + this.curveYawAt(g.wz),
+                             Math.atan(this.bankSlopeAt(g.wz)));
             car.scale.setScalar(1);
             const h = car.userData.handle;
             h.setBrake(0); h.setBoost(0);
@@ -1500,7 +1550,7 @@ export class World {
                 slot.name = g.name;
             }
             slot.label.visible = true;
-            slot.label.position.set(g.wx, 62 + gy, g.wz);
+            slot.label.position.set(gx, 62 + gy, g.wz);
             slot.label.material.opacity = 0.9;
         }
         for (let i = list.length; i < this.ghostPool.length; i++) {
