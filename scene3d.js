@@ -186,36 +186,41 @@ function facadeTextures() {
     return _facades;
 }
 
-let _signs = null;
-function signTextures() {
-    if (_signs) return _signs;
+/* Portrait posters for the lamp poles: one short word stacked letter
+   by letter, the way real pole banners read, over a small strapline. */
+let _posters = null;
+function posterTextures() {
+    if (_posters) return _posters;
     const specs = [
-        { t: 'NEON DRIVE', s: 'MULTIPLAYER GP', c: '#00f0ff' },
-        { t: 'NITRO »»', s: 'FILL UP AHEAD', c: '#ff0055' },
-        { t: 'TURBO CITY', s: 'LIMIT 420 KMH', c: '#ffea00' },
-        { t: 'SECTOR-7', s: 'APEX RACING CLUB', c: '#00ff66' },
-        { t: 'MIDNIGHT GP', s: 'NIGHT STAGE', c: '#c07aff' }
+        { w: 'NEON', s: 'DRIVE', c: '#00f0ff' },
+        { w: 'NITRO', s: 'MAX BOOST', c: '#ff0055' },
+        { w: 'TURBO', s: 'CITY', c: '#ffea00' },
+        { w: 'APEX', s: 'RACING CLUB', c: '#00ff66' }
     ];
-    _signs = specs.map(spec => {
+    _posters = specs.map(spec => {
         const c = document.createElement('canvas');
-        c.width = 512; c.height = 176;
+        c.width = 256; c.height = 448;
         const g = c.getContext('2d');
-        g.fillStyle = '#04060d'; g.fillRect(0, 0, 512, 176);
-        g.strokeStyle = spec.c; g.lineWidth = 7; g.strokeRect(9, 9, 494, 158);
-        g.strokeStyle = 'rgba(255,255,255,0.35)'; g.lineWidth = 2; g.strokeRect(20, 20, 472, 136);
+        g.fillStyle = '#04060d'; g.fillRect(0, 0, 256, 448);
+        g.strokeStyle = spec.c; g.lineWidth = 9; g.strokeRect(11, 11, 234, 426);
+        g.strokeStyle = 'rgba(255,255,255,0.32)'; g.lineWidth = 2; g.strokeRect(24, 24, 208, 400);
+        g.fillStyle = spec.c; g.fillRect(24, 24, 208, 12);            // header bar
         g.textAlign = 'center'; g.textBaseline = 'middle';
-        g.shadowColor = spec.c; g.shadowBlur = 26;
+        g.shadowColor = spec.c; g.shadowBlur = 22;
         g.fillStyle = spec.c;
-        g.font = 'italic 900 72px "Segoe UI", Roboto, sans-serif';
-        g.fillText(spec.t, 256, 80);
-        g.shadowBlur = 10; g.fillStyle = '#eaf4ff';
-        g.font = 'bold 29px "Segoe UI", Roboto, sans-serif';
-        g.fillText(spec.s, 256, 134);
+        g.font = 'italic 900 84px "Segoe UI", Roboto, sans-serif';
+        const letters = spec.w.split('');
+        const stepY = 72, blockH = letters.length * stepY;
+        let cy = 46 + (356 - blockH) / 2 + stepY / 2;                 // centred above the strapline
+        for (const ch of letters) { g.fillText(ch, 128, cy); cy += stepY; }
+        g.shadowBlur = 9; g.fillStyle = '#eaf4ff';
+        g.font = 'bold 27px "Segoe UI", Roboto, sans-serif';
+        g.fillText(spec.s, 128, 408);
         const t = new THREE.CanvasTexture(c);
         t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
         return t;
     });
-    return _signs;
+    return _posters;
 }
 
 let _skyline = null;
@@ -533,11 +538,11 @@ export class World {
 
     /* ---------------------------------------------------------------- *
      *  ROADSIDE — the neon city the road runs through.
-     *  Lit towers in two depth rows, street lamps whose colour matches
-     *  the barrier on their side (cyan left, pink right), advertising
-     *  billboards, and overhead gantries that whip past overhead and
-     *  sell the speed. Everything is instanced or pooled and recycled
-     *  down the road by _placeScenery() — nothing allocates per frame.
+     *  Lit towers in two depth rows and street lamps whose colour
+     *  matches the barrier on their side (cyan left, pink right), each
+     *  lamp pole carrying a neon poster. Nothing stands over the road
+     *  or in front of it. Everything is instanced and recycled down
+     *  the road by _placeScenery() — nothing allocates per frame.
      * ---------------------------------------------------------------- */
     _buildScenery() {
         /* city towers: one instanced mesh per facade style */
@@ -591,55 +596,23 @@ export class World {
         this.lampGlow.frustumCulled = false;
         this.scene.add(this.lampGlow);
 
-        /* billboards: panel + glowing face on twin legs, alternating sides */
-        const signs = signTextures();
-        const darkMat = new THREE.MeshStandardMaterial({ color: '#0b101e', roughness: 0.6, metalness: 0.6 });
-        this.billboards = [];
-        for (let i = 0; i < 8; i++) {
-            const grp = new THREE.Group();
-            const panel = new THREE.Mesh(new THREE.BoxGeometry(150, 56, 4), darkMat);
-            panel.position.y = 86;
-            const face = new THREE.Mesh(new THREE.PlaneGeometry(142, 49),
-                new THREE.MeshBasicMaterial({ map: signs[i % signs.length] }));
-            face.position.set(0, 86, 2.3);
-            grp.add(panel, face);
-            for (const lx of [-48, 48]) {
-                const leg = new THREE.Mesh(new THREE.BoxGeometry(6, 62, 6), darkMat);
-                leg.position.set(lx, 30, 0);
-                grp.add(leg);
-            }
-            grp.userData.side = i % 2 === 0 ? -1 : 1;
-            this.scene.add(grp);
-            this.billboards.push(grp);
-        }
-
-        /* overhead gantries: pillars, a beam, its neon strip, and a sign
-           hanging over the middle of the road */
-        const pillarGeo = new THREE.BoxGeometry(10, 1, 10);
-        pillarGeo.translate(0, 0.5, 0);                     // scaled to meet the beam
-        this.gPillars = new THREE.InstancedMesh(pillarGeo, darkMat, 10);
-        this.gPillars.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.gPillars.frustumCulled = false;
-        this.scene.add(this.gPillars);
-        this.gBeams = new THREE.InstancedMesh(new THREE.BoxGeometry(580, 10, 9), darkMat, 5);
-        this.gBeams.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.gBeams.frustumCulled = false;
-        this.scene.add(this.gBeams);
-        this.gStrips = new THREE.InstancedMesh(new THREE.BoxGeometry(580, 3, 10),
-            new THREE.MeshBasicMaterial({ color: '#ffffff' }), 5);
-        this.gStrips.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-        this.gStrips.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(5 * 3), 3);
-        this.gStrips.frustumCulled = false;
-        for (let i = 0; i < 5; i++) { colTmp.set(i % 2 ? '#ff0055' : '#00f0ff'); this.gStrips.setColorAt(i, colTmp); }
-        if (this.gStrips.instanceColor) this.gStrips.instanceColor.needsUpdate = true;
-        this.scene.add(this.gStrips);
-        this.gSigns = [];
-        for (let i = 0; i < 5; i++) {
-            const s = new THREE.Mesh(new THREE.PlaneGeometry(126, 42),
-                new THREE.MeshBasicMaterial({ map: signs[(i + 2) % signs.length] }));
-            this.scene.add(s);
-            this.gSigns.push(s);
-        }
+        /* Posters ON the lamp poles. The free-standing billboards and the
+           signs hung from overhead gantries are gone: big as they were,
+           perspective marched them into the middle of the view and they
+           sat on the road ahead, hiding the traffic. A poster flat on a
+           pole at the shoulder keeps the colour and the speed sensation
+           and can never be in the way — it is 23 units wide, stands 58
+           units clear of the tarmac edge, and its bottom edge rides
+           above car height. One instanced mesh per poster design; the
+           36 lamps are dealt round the four designs. */
+        this.posters = posterTextures().map(tex => {
+            const m = new THREE.InstancedMesh(new THREE.PlaneGeometry(23, 40),
+                new THREE.MeshBasicMaterial({ map: tex, side: THREE.DoubleSide }), 9);
+            m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+            m.frustumCulled = false;
+            this.scene.add(m);
+            return m;
+        });
     }
 
     /* recycle the roadside down the road, following bend, hill and bank */
@@ -665,8 +638,10 @@ export class World {
             mesh.instanceMatrix.needsUpdate = true;
         }
 
-        /* street lamps in pairs down both shoulders */
+        /* street lamps in pairs down both shoulders, each carrying a
+           poster flat on its pole, facing the oncoming traffic */
         let n = 0;
+        const posterN = this.posters.map(() => 0);
         for (const side of [-1, 1]) {
             for (let k = 0; k < 18; k++) {
                 const z = wrapFn(k, 430, 18);
@@ -682,50 +657,22 @@ export class World {
                 this.lampGlowPos[n * 3] = bx + side * 265;
                 this.lampGlowPos[n * 3 + 1] = baseY + 79;
                 this.lampGlowPos[n * 3 + 2] = z;
+                /* the poster rides just in front of the pole's traffic
+                   face (local +z), centred 47 up — clear above the cars */
+                const pi = n % this.posters.length;
+                d.position.set(bx + side * 278 + Math.sin(yaw) * 2.4, baseY + 47,
+                               z + Math.cos(yaw) * 2.4);
+                d.rotation.set(0, yaw, 0); d.scale.set(1, 1, 1);
+                d.updateMatrix();
+                this.posters[pi].setMatrixAt(posterN[pi]++, d.matrix);
                 n++;
             }
         }
         this.lampPoles.instanceMatrix.needsUpdate = true;
         this.lampHeads.instanceMatrix.needsUpdate = true;
         this.lampGlowGeo.attributes.position.needsUpdate = true;
+        for (const pm of this.posters) pm.instanceMatrix.needsUpdate = true;
 
-        /* billboards, angled a little toward the traffic */
-        for (let k = 0; k < this.billboards.length; k++) {
-            const grp = this.billboards[k];
-            const side = grp.userData.side;
-            const z = wrapFn(k, 980, 8) + (hash1(k * 17 + 2) - 0.5) * 120;
-            grp.position.set(this.bendAt(z) + side * 335, this.terrainYAt(z, side * 335) - 3, z);
-            grp.rotation.set(0, this.curveYawAt(z) - side * 0.24, 0);
-        }
-
-        /* gantries spanning the whole road */
-        for (let k = 0; k < 5; k++) {
-            const z = wrapFn(k, 1550, 5);
-            const bx = this.bendAt(z), yaw = this.curveYawAt(z);
-            const bank = this.bankSlopeAt(z);
-            const beamY = this.heightAt(z) + 104;
-            d.position.set(bx, beamY, z);
-            d.rotation.set(this.pitchAt(z), yaw, Math.atan(bank)); d.scale.set(1, 1, 1);
-            d.updateMatrix();
-            this.gBeams.setMatrixAt(k, d.matrix);
-            d.position.set(bx, beamY - 7, z);
-            d.updateMatrix();
-            this.gStrips.setMatrixAt(k, d.matrix);
-            for (const side of [-1, 1]) {
-                const baseY = this.terrainYAt(z, side * 272);
-                const h = Math.max(20, beamY + bank * (side * 272) - baseY + 4);
-                d.position.set(bx + side * 272, baseY - 2, z);
-                d.rotation.set(0, yaw, 0); d.scale.set(1, h, 1);
-                d.updateMatrix();
-                this.gPillars.setMatrixAt(k * 2 + (side > 0 ? 1 : 0), d.matrix);
-            }
-            const sign = this.gSigns[k];
-            sign.position.set(bx + Math.sin(yaw) * 7, beamY - 30, z + Math.cos(yaw) * 7);
-            sign.rotation.set(0, yaw, 0);
-        }
-        this.gBeams.instanceMatrix.needsUpdate = true;
-        this.gStrips.instanceMatrix.needsUpdate = true;
-        this.gPillars.instanceMatrix.needsUpdate = true;
     }
 
     /* ---------------------------------------------------------------- */
@@ -1131,9 +1078,10 @@ export class World {
         this._syncCurve();
         return Math.atan(slopeAt(this.roadSAt(z)));
     }
-    /* where the centreline is under the car, in world units. script.js watches
-       this: a car going straight keeps its own line while this slides away
-       from it, and that slide is what walks you into the barrier. */
+    /* where the centreline is under the car, in absolute road units.
+       Kept for the dev harness: the game itself no longer pushes the
+       car around with it — the car's offset is measured from this
+       centreline, so it simply travels with the road. */
     centreUnderCar() { this._syncCurve(); return this._centre0; }
 
     /* Road height at z, measured the same car-relative way as the bend:

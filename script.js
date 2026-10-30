@@ -178,10 +178,6 @@ const wheelRim = document.getElementById('wheel-rim');
    centre when you let go. WHEEL_MAX is the lock in degrees each way. */
 const WHEEL_MAX = 120;
 let wheelAngle = 0, wheelGrab = false, wheelTouchId = null;
-/* where the road's centreline sat under the car last frame; the difference
-   between then and now is how far the road has slid away from a car that is
-   holding its line. Null until the first frame of a race. */
-let roadCentre = null;
 let wheelNearHub = false, wheelStartAngle = 0, wheelStartX = 0, wheelStartWheel = 0;
 let brakeActive = false;
 const wheelSteer = () => wheelAngle / WHEEL_MAX;        // -1 (full left) .. 1 (full right)
@@ -855,17 +851,20 @@ class Player {
         this.rollV += ((rollT - this.roll) * 120 - this.rollV * 12) * dt;
         this.roll += this.rollV * dt;
 
-        /* The road is a thing of its own now, and this car is not on rails.
-           Hold the wheel straight and the road curves away from under you,
-           so you walk towards the outside of the bend instead of being
-           carried round it. Steering is what keeps you on the tarmac. */
-        if(world) {
-            const centre = world.centreUnderCar();
-            if(roadCentre !== null) this.x -= (centre - roadCentre);
-            roadCentre = centre;
-        }
-        /* The barriers are solid. The road will not steer for you, but it
-           will stop you leaving it -- at a cost, so sitting against the wall
+        /* The car's place across the road is the driver's alone. This x is
+           measured from the road's own centreline (lanes, traffic and the
+           renderer's bend all share that frame), so holding the wheel
+           straight simply holds the car straight down the track — round
+           bends exactly as on straights, no sideways push from the road,
+           no drift toward the outside of a curve. The only things that
+           can move this car sideways are the steering above and the
+           barriers below. (An older version slid the car by however far
+           the centreline had moved under it each frame, which walked a
+           hands-off car into the barrier even on a straight and pushed
+           it against every bend. That is what read as the car turning
+           by itself, and it is gone.) */
+        /* The barriers are solid: steering is yours alone, but the wall
+           will stop you leaving the road -- at a cost, so sitting against it
            is not a way to take a corner. Arrive at the wall already moving
            sideways and it bounces you back off it like a real barrier;
            merely lean on it and it just grinds the speed away. */
@@ -1060,7 +1059,6 @@ function restartGame() {
     /* the engine was muted at the last flag — bring it back for the new race */
     if(engineGain) engineGain.gain.setValueAtTime(ENGINE_VOLUME, audioCtx.currentTime);
     player = new Player();
-    roadCentre = null;          // new race, new bends: re-base the slide
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = START_NITRO; bullets = 0; crashStun = 0;
     lonAccel = 0; engineLoad = 0;
