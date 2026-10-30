@@ -165,6 +165,13 @@ h1 {
     cursor: pointer;
 }
 .btn-home { border-color: #00f0ff; background: rgba(0, 240, 255, 0.1); }
+.pwa-install-btn {
+    margin-top: 10px;
+    border-color: #00f0ff;
+    background: rgba(0, 240, 255, 0.12);
+    box-shadow: 0 0 16px rgba(0, 240, 255, 0.28);
+}
+.pwa-install-btn[hidden] { display: none !important; }
 
 /* Readouts hug the two top corners: the whole middle of the screen stays
    road, which is what makes the game work with the phone on its side. */
