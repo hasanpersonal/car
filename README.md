@@ -33,7 +33,8 @@ GitHub Pages. All local file paths are relative.
 │   │   ├── controls.css        Steering wheel, pedals and ability buttons
 │   │   ├── lobby-extras.css    Chat, quick-match and short-screen lobby rules
 │   │   ├── responsive.css      Landscape layout adjustments
-│   │   └── rotate-lock.css     Animated “rotate your device” screen
+│   │   ├── rotate-lock.css     Animated “rotate your device” screen
+│   │   └── opening.css         Landscape race-selection opening screen
 │   ├── js/
 │   │   ├── game/
 │   │   │   ├── config.js       Firebase settings and editable tuning values
@@ -68,14 +69,15 @@ GitHub Pages. All local file paths are relative.
 | Camera height, distance, field of view or framing | `src/js/world/camera.js` |
 | Buildings, lamp-pole posters or skyline artwork | `src/js/world/textures.js` |
 | Car shape, colors, wheels or lights | `src/js/world/car3d.js` |
-| Lobby and menu appearance | `src/css/screens.css` |
+| Opening race-selection screen | `src/css/opening.css` |
+| Waiting and game-over menus | `src/css/screens.css` |
 | HUD appearance | `src/css/hud.css` |
 | Wheel, BOOST/BRAKE pedals and ability buttons | `src/css/controls.css` |
 | Phone/landscape sizing | `src/css/responsive.css` |
 
 ## How the files connect
 
-1. `index.html` loads the seven CSS files in the order shown above. Keep that
+1. `index.html` loads the CSS files in the order shown above. Keep that
    order: later stylesheets intentionally refine earlier ones.
 2. `index.html` loads Firebase, maps the `three` import to
    `src/vendor/three.min.js`, and starts `src/js/game/main.js`.

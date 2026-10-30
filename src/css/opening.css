@@ -1,0 +1,114 @@
+/* Opening screen: a compact, landscape-first race selection dashboard. */
+#start-screen {
+    display: flex;
+    justify-content: safe center;
+    align-items: safe center;
+    padding: max(12px, env(safe-area-inset-top)) max(18px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left));
+    overflow-y: auto;
+    touch-action: pan-y;
+    background:
+        radial-gradient(ellipse at 10% 110%, rgba(0, 240, 255, .10), transparent 44%),
+        radial-gradient(ellipse at 88% 0%, rgba(255, 0, 85, .08), transparent 45%),
+        rgba(3, 5, 13, .97);
+}
+#start-screen.hidden { display: none; }
+#start-screen * { touch-action: pan-y; }
+#start-screen input { touch-action: auto; user-select: text; -webkit-user-select: text; }
+.start-layout {
+    width: min(100%, 1180px);
+    display: grid;
+    grid-template-columns: minmax(160px, .82fr) minmax(0, 2.45fr);
+    gap: clamp(18px, 4vw, 60px);
+    align-items: center;
+    text-align: left;
+}
+.start-brand { min-width: 0; }
+.brand-kicker, .section-kicker, .card-number, .brand-note, .heading-mark, .start-footer {
+    font-family: monospace;
+    font-weight: 700;
+    letter-spacing: .12em;
+    text-transform: uppercase;
+}
+.brand-kicker { color: #77a4b2; font-size: clamp(8px, 1.1vw, 10px); white-space: nowrap; }
+.brand-kicker span { display: inline-block; width: 7px; height: 7px; margin-right: 6px; border-radius: 50%; background: #00ffae; box-shadow: 0 0 10px #00ffae; }
+#start-screen h1 {
+    margin: 14px 0 3px;
+    font-size: clamp(28px, 4.3vw, 56px);
+    line-height: .9;
+    letter-spacing: -.035em;
+    font-style: italic;
+    background: none;
+    -webkit-text-fill-color: #f4faff;
+    filter: none;
+}
+#start-screen h1 span { display: block; -webkit-text-fill-color: #00f0ff; text-shadow: 0 0 24px rgba(0, 240, 255, .35); }
+.brand-subtitle { margin-top: 11px; color: #ff587d; font-size: clamp(8px, 1.1vw, 11px); font-weight: 800; letter-spacing: .19em; }
+.brand-description { margin-top: clamp(12px, 3vh, 30px); color: #9aaac2; font-size: clamp(11px, 1.4vw, 15px); line-height: 1.5; }
+#start-screen .solo-button {
+    display: inline-flex; align-items: center; justify-content: center; gap: 9px;
+    width: 100%; max-width: 240px; min-height: 42px; margin-top: clamp(12px, 3vh, 26px);
+    padding: 9px; border: 1px solid rgba(255, 234, 0, .65); border-radius: 6px;
+    background: rgba(255, 234, 0, .08); color: #ffe877; font-size: clamp(9px, 1.1vw, 12px); letter-spacing: .05em;
+}
+.solo-icon { font-size: 10px; }
+.brand-note { margin-top: 12px; color: #5e7387; font-size: 8px; }
+.brand-note span { color: #00f0ff; }
+.start-content { min-width: 0; }
+.start-heading { display: flex; justify-content: space-between; align-items: end; gap: 10px; margin-bottom: 13px; }
+.section-kicker { color: #00dce9; font-size: 9px; }
+.start-heading h2 { margin-top: 5px; color: #f5f8ff; font-size: clamp(13px, 1.8vw, 20px); letter-spacing: .06em; }
+.heading-mark { color: #4c6276; font-size: 10px; white-space: nowrap; }
+.start-cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: clamp(7px, 1vw, 12px); align-items: stretch; }
+#start-screen .race-card {
+    display: flex; flex-direction: column; width: auto; max-width: none; min-width: 0; margin: 0;
+    padding: clamp(9px, 1.4vw, 17px); border: 1px solid #203345; border-radius: 8px;
+    background: linear-gradient(155deg, rgba(15, 25, 40, .94), rgba(6, 10, 20, .96));
+    box-shadow: inset 0 1px rgba(255,255,255,.025);
+}
+#start-screen .quick-match { border-color: rgba(0, 255, 174, .45) !important; box-shadow: inset 0 2px #00e99c, 0 0 22px rgba(0, 255, 174, .05); }
+#start-screen .create-card { box-shadow: inset 0 2px #00dce9; }
+#start-screen .join-card { box-shadow: inset 0 2px #c054ff; }
+.card-number { color: #7891a6; font-size: 10px; }
+.card-number span { color: #495c70; font-size: 8px; }
+#start-screen .slot-title { margin: 13px 0 0; color: #f3f8ff; font-size: clamp(10px, 1.25vw, 14px); letter-spacing: .04em; line-height: 1.2; }
+#start-screen .quick-match .slot-title { color: #79ffcf; }
+.card-description { min-height: 2.5em; margin: 6px 0 10px; color: #8295aa; font-size: clamp(9px, 1.05vw, 12px); line-height: 1.25; }
+#start-screen .lobby-input {
+    min-height: 34px; padding: 7px 8px; border: 1px solid #273e50; border-radius: 5px;
+    background: rgba(3, 9, 17, .82); color: #e5fcff; text-align: left; font-size: clamp(11px, 1.1vw, 13px); font-weight: 500;
+}
+#start-screen .lobby-input::placeholder { color: #7c8ea0; opacity: 1; }
+#start-screen .lobby-input:focus { border-color: #00f0ff; outline: 2px solid rgba(0,240,255,.22); }
+#start-screen .room-code { margin-top: 6px; }
+#start-screen .race-card .btn-main {
+    display: flex; justify-content: space-between; align-items: center; gap: 4px;
+    min-height: 36px; margin-top: auto; padding: 9px; border-radius: 5px;
+    font-size: clamp(9px, 1.05vw, 11px); letter-spacing: .04em; text-align: left;
+    box-shadow: none;
+}
+#start-screen .race-card .lobby-input + .btn-main { margin-top: 8px; }
+#start-screen .btn-random { box-shadow: none !important; }
+#start-screen .search-status { min-height: 0; margin-top: 6px; font-size: 9px; overflow-wrap: anywhere; }
+#start-screen .search-status:empty { display: none; }
+.start-footer { display: flex; justify-content: space-between; gap: 8px; margin-top: 13px; color: #60748a; font-size: 8px; }
+.start-footer b { color: #ff557a; }
+@media (orientation: landscape) and (max-height: 420px) {
+    #start-screen { padding-top: max(8px, env(safe-area-inset-top)); padding-bottom: max(8px, env(safe-area-inset-bottom)); }
+    .start-layout { gap: clamp(12px, 3vw, 28px); }
+    #start-screen h1 { margin-top: 9px; }
+    .brand-description { margin-top: 10px; }
+    #start-screen .solo-button { margin-top: 12px; min-height: 36px; }
+    .brand-note { margin-top: 7px; }
+    .start-heading { margin-bottom: 8px; }
+    #start-screen .slot-title { margin-top: 8px; }
+    .card-description { margin: 4px 0 7px; }
+    .start-footer { margin-top: 8px; }
+}
+@media (orientation: portrait) and (max-width: 600px) {
+    .start-layout { grid-template-columns: 1fr; gap: 18px; }
+    #start-screen h1 span { display: inline; }
+    .start-cards { grid-template-columns: 1fr; }
+    #start-screen .race-card { gap: 3px; }
+    .card-description { min-height: 0; }
+    .start-footer { flex-wrap: wrap; }
+}
