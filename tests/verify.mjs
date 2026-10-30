@@ -694,5 +694,97 @@ window.playSolo();
 for (let i = 0; i < 5; i++) fire();
 ok(hist.slice(hist.lastIndexOf(0) + 1).some(v => v > 0.05), 'and the engine comes back for the next race');
 
+/* =================================================================== */
+console.log('\n=== hills, banking and the roadside city ===');
+{
+    const w = new World(env.gameCanvas); w.renderer.render = () => {};
+    env.setSize(844, 390); w.resize(); w._playerZ = 0;
+    let maxGrade = 0, lo = 0, hi = 0, maxBank = 0, flat = true;
+    for (let seed = 0; seed < 24; seed++) {
+        reseedCurves(seed);
+        for (let step = 0; step < 6; step++) {
+            w.scrollRoad(seed * 977 + step * 4100);
+            w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+            if (Math.abs(w.heightAt(0)) > 1e-9) flat = false;
+            maxGrade = Math.max(maxGrade, Math.abs(w.roadGrade()));
+            for (const d of [500, 1500, 3000]) { const h = w.heightAt(-d); lo = Math.min(lo, h); hi = Math.max(hi, h); }
+            maxBank = Math.max(maxBank, Math.abs(w.bankSlopeAt(-1200)));
+        }
+    }
+    ok(flat, 'the road is always flat and level under the car itself');
+    ok(hi - lo > 90, `and it really rolls: ${lo.toFixed(0)}..+${hi.toFixed(0)} units of crest and dip ahead`);
+    ok(maxGrade <= 0.055 && maxGrade > 0.02, `grades stay road-like but real (worst ${(maxGrade * 100).toFixed(1)}%)`);
+    ok(maxBank > 0.03, `corners are banked (up to ${(Math.atan(maxBank) * 180 / Math.PI).toFixed(1)}deg)`);
+    /* the outside of a bend is the high side */
+    let checked = 0, right = 0;
+    for (let seed = 0; seed < 24; seed++) {
+        reseedCurves(seed);
+        for (let s = 0; s < 6; s++) {
+            w.scrollRoad(seed * 613 + s * 3700);
+            for (const z of [-600, -1400]) {
+                const yr = w.curveYawAt(z - 60) - w.curveYawAt(z + 60);
+                const b = w.bankSlopeAt(z);
+                if (Math.abs(yr) > 0.004 && Math.abs(b) > 0.01) { checked++; if (Math.sign(b) === -Math.sign(yr)) right++; }
+            }
+        }
+    }
+    ok(checked > 20 && right === checked, `and banked the right way round: outside edge up in ${right}/${checked} bends`);
+    /* the city is actually there, on screen, and clear of the road */
+    reseedCurves(CURVE_SEED);
+    w.scrollRoad(12345);
+    w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
+    w.camera.updateMatrixWorld(true);
+    const m4 = new THREE.Matrix4();
+    let towersSeen = 0, clear = 1e9, nan = 0;
+    for (const b of w.buildings) for (let i = 0; i < b.count; i++) {
+        b.getMatrixAt(i, m4);
+        const e = m4.elements;
+        if (e.some(n => !isFinite(n))) nan++;
+        clear = Math.min(clear, Math.abs(e[12] - w.bendAt(e[14])) - Math.abs(e[0]) / 2);
+        const v = new THREE.Vector3(e[12], e[13] + 80, e[14]).project(w.camera);
+        if (e[14] < 250 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1) towersSeen++;
+    }
+    ok(w.buildings.length === 2 && w.billboards.length === 8 && w.gBeams.count === 5 && w.lampHeads.count === 36,
+       'roadside built: towers, street lamps, billboards, gantries');
+    ok(towersSeen > 4, `and visible from the driver's seat (${towersSeen} towers in frame)`);
+    ok(clear > 230 && nan === 0, `standing clear of the tarmac (nearest face ${clear.toFixed(0)}u out, no NaNs)`);
+    reseedCurves(CURVE_SEED);
+}
+
+console.log('\n=== traffic drives, and physics runs on time, not frames ===');
+window.playSolo();
+let laneChanges = 0; const laneSeen = new Map(); let vMin = 1e9, vMax = 0, brakeFrames = 0;
+for (let i = 0; i < 2400; i++) {
+    drive();
+    for (const e of (liveEnemies || [])) {
+        vMin = Math.min(vMin, e.v); vMax = Math.max(vMax, e.v);
+        if (e.brake) brakeFrames++;
+        const prev = laneSeen.get(e);
+        if (prev !== undefined && Math.abs(prev - e.laneX) > 30) laneChanges++;
+        laneSeen.set(e, e.laneX);
+    }
+}
+console.log(`  traffic pace ${vMin.toFixed(0)}..${vMax.toFixed(0)} KMH, ${laneChanges} lane changes, ${brakeFrames} braking car-frames`);
+ok(vMax - vMin > 8, 'each driver settles at their own pace around the old 60');
+ok(brakeFrames > 0, 'and they brake for the car in front instead of driving through it');
+ok(laneChanges > 3, 'and they change lanes when there is a gap');
+/* one simulated second from rest must be the same second at any refresh rate */
+const burst = (frames, ms) => {
+    window.playSolo();
+    let t = burst.t || 1000;
+    for (let i = 0; i < frames; i++) {
+        window.wheelSetAngle(Math.max(-120, Math.min(120, -window.carRoadOffset() * 3.6)));
+        const cb = rafCb; rafCb = null; t += ms; if (cb) cb(t);
+    }
+    burst.t = t;
+    return speed();
+};
+const at60 = burst(60, 1000 / 60);
+const at120 = burst(120, 1000 / 120);
+const at30 = burst(30, 1000 / 30);
+console.log(`  one second from rest: 30Hz ${at30} | 60Hz ${at60} | 120Hz ${at120}`);
+ok(at60 > 120 && Math.abs(at120 - at60) < at60 * 0.14 && Math.abs(at30 - at60) < at60 * 0.18,
+   'a 120Hz phone no longer runs the game at double speed');
+
 console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
 process.exit(fail ? 1 : 0);
