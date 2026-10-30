@@ -12,8 +12,35 @@ const firebaseConfig = {
     appId: "1:1033988386517:web:ff4c6befb8fcee7e84bc5c",
     measurementId: "G-QLLSTFR1XX"
 };
-firebase.initializeApp(firebaseConfig);
-const database = firebase.database();
+/* Multiplayer is an enhancement, not a boot dependency. An installed
+ * PWA may be launched offline before the Firebase CDN script is in the
+ * service-worker cache; in that case the game must still start and offer
+ * Solo Practice instead of dying on an undefined global. */
+let database = null;
+try {
+    const firebaseSdk = globalThis.firebase;
+    if (firebaseSdk && typeof firebaseSdk.initializeApp === 'function') {
+        try {
+            firebaseSdk.initializeApp(firebaseConfig);
+        } catch (error) {
+            /* A second module instance (used by the two-player test) can
+             * meet the already-created default app; reuse it. */
+            if (!firebaseSdk.apps || firebaseSdk.apps.length === 0) throw error;
+        }
+        database = firebaseSdk.database();
+    }
+} catch (error) {
+    console.warn('NEON DRIVE multiplayer SDK unavailable; solo mode remains available.', error);
+    database = null;
+}
+const isMultiplayerAvailable = () =>
+    !!database && globalThis.navigator?.onLine !== false;
+function requireMultiplayerConnection() {
+    if (isMultiplayerAvailable()) return true;
+    isMultiplayer = false;
+    alert('Multiplayer needs an internet connection. Solo Practice works offline.');
+    return false;
+}
 
 // --- GAME & MULTIPLAYER STATE ---
 let myId = Math.random().toString(36).substr(2, 9);
@@ -199,7 +226,8 @@ const ENGINE_VOLUME = 0.12;     // engine level (was 0.015, then 0.055)
 function createRoom() {
     myName = document.getElementById('host-name').value.trim();
     if(!myName) return alert("Enter Host Name!");
-    
+    if(!requireMultiplayerConnection()) return;
+
     currentRoom = Math.floor(1000 + Math.random() * 9000).toString();
     isHost = true;
     isMultiplayer = true;
@@ -226,6 +254,7 @@ function joinRoom() {
     myName = document.getElementById('joiner-name').value.trim();
     currentRoom = document.getElementById('room-code-input').value.trim();
     if(!myName || !currentRoom) return alert("Enter Player Name and Room Code!");
+    if(!requireMultiplayerConnection()) return;
     isMultiplayer = true;
 
     database.ref('car_rooms/' + currentRoom).once('value', snapshot => {
@@ -273,6 +302,10 @@ function findRandomGame() {
     const name = (document.getElementById('random-name').value || '').trim()
               || (document.getElementById('host-name').value || '').trim();
     if (!name) return alert("Enter your name first!");
+    if (!requireMultiplayerConnection()) {
+        setSearchUI('OFFLINE — SOLO PRACTICE IS AVAILABLE', false);
+        return;
+    }
     myName = name;
     isMultiplayer = true;
     roomClosed = false;
@@ -369,9 +402,11 @@ function cancelSearch(timedOut) {
     mmSearching = false;
     if (mmTimer) { clearInterval(mmTimer); mmTimer = null; }
     if (mmScan) { clearInterval(mmScan); mmScan = null; }
-    const ref = database.ref(MM_PATH + '/' + myId);
-    if (mmListener) { try { ref.off('value', mmListener); } catch (e) {} mmListener = null; }
-    ref.remove();
+    if (database) {
+        const ref = database.ref(MM_PATH + '/' + myId);
+        if (mmListener) { try { ref.off('value', mmListener); } catch (e) {} mmListener = null; }
+        ref.remove();
+    }
     setSearchUI(timedOut ? 'NO DRIVERS FOUND — TRY AGAIN' : '', false);
 }
 
@@ -394,7 +429,7 @@ function showStartCountdown(ms) {
 
 /* the room is wiped once everyone is done, so nothing is left on the server */
 function scheduleRoomCleanup() {
-    if (!isMultiplayer || !currentRoom || !isHost || roomClosed) return;
+    if (!database || !isMultiplayer || !currentRoom || !isHost || roomClosed) return;
     const room = 'car_rooms/' + currentRoom;
     safeOnDisconnect(database.ref(room));              // gone even if the host closes the tab
     setTimeout(() => {
@@ -404,12 +439,13 @@ function scheduleRoomCleanup() {
     }, ROOM_CLEANUP_DELAY);
 }
 function closeRoomNow() {
-    if (!isMultiplayer || !currentRoom || !isHost || roomClosed) return;
+    if (!database || !isMultiplayer || !currentRoom || !isHost || roomClosed) return;
     roomClosed = true;
     database.ref('car_rooms/' + currentRoom).remove();
 }
 
 function listenToRoom() {
+    if (!database || !currentRoom) return;
     database.ref('car_rooms/' + currentRoom).on('value', snapshot => {
         const data = snapshot.val();
         if(!data) {                      // room was deleted — stop listening to it
@@ -484,7 +520,7 @@ function listenToRoom() {
 function sendChatMessage() {
     const input = document.getElementById('chat-input');
     const msgText = input.value.trim();
-    if (!msgText) return;
+    if (!msgText || !database || !currentRoom) return;
 
     database.ref('car_rooms/' + currentRoom + '/chats').push({
         sender: myName,
@@ -495,6 +531,7 @@ function sendChatMessage() {
 }
 
 function startMultiplayerGame() {
+    if (!database || !currentRoom) return;
     // পরবর্তী ম্যাচের জন্য সবার পয়েন্ট শুরুতে রিসেট করে দেওয়া
     let updates = { status: "playing" };
     Object.keys(opponentsData).forEach(id => {
@@ -1194,7 +1231,7 @@ function endRaceDuration() {
     let myKM = (score / 1000).toFixed(2);
     document.getElementById('final-score-lbl').innerText = `YOUR FINAL SCORE: ${Math.floor(score)} (${myKM} KM)`;
     
-    if(isMultiplayer && isHost && !roomClosed) {
+    if(database && isMultiplayer && isHost && !roomClosed) {
         database.ref('car_rooms/' + currentRoom).update({ status: "finished" });
         scheduleRoomCleanup();
     }
@@ -1393,7 +1430,7 @@ function render(ts) {
         if(boostSub && boostSub.innerText !== nitroTxt) boostSub.innerText = nitroTxt;
         if(btnBoost) btnBoost.classList.toggle('empty', nitro <= 0);
 
-        if(isMultiplayer && Date.now() - lastSyncTime > 100) {
+        if(database && isMultiplayer && Date.now() - lastSyncTime > 100) {
             database.ref('car_rooms/' + currentRoom + '/players/' + myId).update({
                 x: player.x,
                 score: score
