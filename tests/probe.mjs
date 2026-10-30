@@ -4,7 +4,7 @@ import { makeEnv } from './glstub.mjs';
 const env = makeEnv(844, 390);
 globalThis.document = env.doc; globalThis.window = env.win; globalThis.self = env.win;
 const THREE = await import('three');
-const { World, CAM } = await import('../scene3d.js');
+const { World, CAM } = await import('../src/js/world/scene3d.js');
 
 const CARB = [[-22, 0, -42.5], [22, 0, -42.5], [-22, 21, 41], [22, 21, 41], [0, 21, -42.5]];
 

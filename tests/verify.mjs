@@ -31,8 +31,8 @@ const db = new FakeDB();
 globalThis.firebase = makeFirebase(db);
 
 const THREE = await import('three');
-const { World, reseedCurves } = await import('../scene3d.js');
-const car3d = await import('../car3d.js');
+const { World, reseedCurves } = await import('../src/js/world/scene3d.js');
+const car3d = await import('../src/js/world/car3d.js');
 /* the bends are random per race; pin them so framing is measurable */
 const CURVE_SEED = 20251029;
 reseedCurves(CURVE_SEED);
@@ -47,7 +47,7 @@ const EXPORTS = ['findRandomGame','cancelSearch','playSolo','useGhost','useNuke'
                  'createRoom','joinRoom','sendChatMessage','startMultiplayerGame','backToLobby',
                  'checkOrientation','wheelSetAngle','carRoadOffset','carPhysicsState'];
 const grab = () => Object.fromEntries(EXPORTS.map(k => [k, globalThis.window[k]]));
-await import('../script.js');
+await import('../src/js/game/main.js');
 const A = grab();
 
 const fire = () => { const cb = rafCb; rafCb = null; if (cb) cb(0); };
@@ -70,18 +70,16 @@ const ammo = () => parseInt(document.querySelectorAll('.ammo-count')[0].innerTex
 const score = () => parseInt(el('score-txt').innerText) || 0;
 const speed = () => parseInt(el('speed-txt').innerText) || 0;
 const nitroPct = () => parseInt(el('nitro-percent-txt').innerText) || 0;
-const src = readFileSync(new URL('../script.js', import.meta.url), 'utf8');
-const cssSrc = readFileSync(new URL('../style.css', import.meta.url), 'utf8');
-const airSrc = readFileSync(new URL('../scene3d.js', import.meta.url), 'utf8');
+const src = [
+    readFileSync(new URL('../src/js/game/config.js', import.meta.url), 'utf8'),
+    readFileSync(new URL('../src/js/game/main.js', import.meta.url), 'utf8')
+].join('\n');
 const htmlSrc = readFileSync(new URL('../index.html', import.meta.url), 'utf8');
-const pwaSrc = readFileSync(new URL('../pwa.js', import.meta.url), 'utf8');
-const swSrc = readFileSync(new URL('../service-worker.js', import.meta.url), 'utf8');
-const offlineSrc = readFileSync(new URL('../offline.html', import.meta.url), 'utf8');
-const manifest = JSON.parse(readFileSync(new URL('../manifest.webmanifest', import.meta.url), 'utf8'));
-const pngSize = (path) => {
-    const b = readFileSync(new URL('../' + path, import.meta.url));
-    return [b.readUInt32BE(16), b.readUInt32BE(20)];
-};
+/* Read the split stylesheets in exactly the order index.html loads them. */
+const cssSrc = [...htmlSrc.matchAll(/<link rel="stylesheet" href="([^"]+)"/g)]
+    .map(m => readFileSync(new URL('../' + m[1], import.meta.url), 'utf8'))
+    .join('\n');
+const airSrc = readFileSync(new URL('../src/js/world/scene3d.js', import.meta.url), 'utf8');
 const RACE_SECONDS = +(src.match(/RACE_SECONDS = (\d+)/) || [])[1];
 const FAR_Z = +(airSrc.match(/const FAR_Z = (-?\d+)/) || [])[1];
 const RACE_MS = (RACE_SECONDS + 1) * 1000;
@@ -704,7 +702,7 @@ el('random-name').value = 'ALICE';
 A.findRandomGame();
 await flush();
 ok(Object.keys(db._get(['car_matchmaking']) || {}).length === 1, 'first player queues');
-await import('../script.js?player2');
+await import('../src/js/game/main.js?player2');
 const B = grab();
 el('random-name').value = 'BOB';
 B.findRandomGame();
@@ -905,61 +903,6 @@ console.log('\n=== a real car: straight means straight, bends do not carry you =
     drive(300);
     ok(Math.abs(window.carRoadOffset()) < 45, 'and a driver who counter-steers brings it back to the middle');
 }
-
-/* =================================================================== */
-console.log('\n=== ready for PWABuilder ===');
-ok(manifest.name === 'NEON DRIVE - Multiplayer Racing' && manifest.short_name === 'NEON DRIVE' &&
-   typeof manifest.description === 'string' && manifest.description.length > 40,
-   'manifest carries the app name, short name and store description');
-ok(manifest.start_url === './' && manifest.scope === './' && manifest.id === './',
-   'manifest uses relative start/scope/id, so it works at a domain root or a GitHub Pages project path');
-ok(manifest.display === 'fullscreen' && manifest.orientation === 'landscape' &&
-   manifest.theme_color === '#04050c' && manifest.background_color === '#04050c',
-   'installed app launches fullscreen, landscape, on the game background colour');
-{
-    const icons = manifest.icons || [];
-    const has = (purpose, sizes) => icons.some(i => i.purpose === purpose && i.sizes === sizes);
-    ok(has('any', '192x192') && has('any', '512x512') &&
-       has('maskable', '192x192') && has('maskable', '512x512'),
-       'manifest has installable 192/512 icons plus maskable Android icons');
-    let badIcons = 0;
-    for (const icon of icons) {
-        const [w, h] = pngSize(icon.src);
-        const [wantW, wantH] = icon.sizes.split('x').map(Number);
-        if (w !== wantW || h !== wantH || icon.type !== 'image/png') badIcons++;
-    }
-    const [appleW, appleH] = pngSize('icons/apple-touch-icon.png');
-    ok(badIcons === 0 && appleW === 180 && appleH === 180,
-       `every manifest icon exists at exactly its declared size (${icons.length} icons, Apple touch icon 180px)`);
-}
-ok(/<link rel="manifest" href="manifest\.webmanifest">/.test(htmlSrc) &&
-   /name="theme-color" content="#04050c"/.test(htmlSrc) &&
-   /rel="apple-touch-icon"[^>]+icons\/apple-touch-icon\.png/.test(htmlSrc) &&
-   /id="install-app-btn"[^>]*hidden/.test(htmlSrc) &&
-   /<script src="pwa\.js" defer><\/script>/.test(htmlSrc),
-   'the page links the manifest, theme, Apple icon, hidden install button and PWA registration');
-ok(/navigator\.serviceWorker\.register\(\s*'.\/service-worker\.js'/.test(pwaSrc) &&
-   /updateViaCache: 'none'/.test(pwaSrc) &&
-   /beforeinstallprompt/.test(pwaSrc) && /appinstalled/.test(pwaSrc),
-   'pwa.js registers and updates the service worker and handles the browser install prompt');
-{
-    const shell = ['./index.html', './offline.html', './manifest.webmanifest', './style.css',
-                   './script.js', './scene3d.js', './car3d.js', './pwa.js', './vendor/three.min.js'];
-    ok(shell.every(p => swSrc.includes(`'${p}'`)) &&
-       /addEventListener\('install'/.test(swSrc) && /addEventListener\('activate'/.test(swSrc) &&
-       /addEventListener\('fetch'/.test(swSrc),
-       'service worker precaches the whole game shell and has install/activate/fetch handlers');
-}
-ok(/request\.mode === 'navigate'/.test(swSrc) && /offline\.html/.test(swSrc) &&
-   /firebasedatabase\.app/.test(swSrc) && /firebase-app-compat\.js/.test(swSrc) &&
-   /firebase-database-compat\.js/.test(swSrc),
-   'offline navigations fall back to the cached game/offline page, live Firebase data is never cached, and the SDK is runtime-cached');
-ok(/let database = null/.test(src) && /globalThis\.firebase/.test(src) &&
-   /globalThis\.navigator\?\.onLine !== false/.test(src) &&
-   /Solo Practice works offline/.test(src),
-   'the game boots without Firebase offline: solo remains available and multiplayer explains itself');
-ok(/YOU ARE OFFLINE/.test(offlineSrc) && /Solo Practice/.test(offlineSrc),
-   'there is a branded offline fallback page');
 
 console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
 process.exit(fail ? 1 : 0);

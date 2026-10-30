@@ -1,0 +1,38 @@
+/* NEON DRIVE — responsive.css: Landscape layout changes for phones and short landscape screens. */
+/* ------------------------------------------------------------------ *
+ *  Rotated (landscape) phones: drop the portrait letterboxing so the
+ *  road runs the full width of the screen, and pull the controls in to
+ *  the corners so they sit under your thumbs instead of over the track.
+ * ------------------------------------------------------------------ */
+@media (orientation: landscape) {
+    #game-container { max-width: none; max-height: none; }
+    #wheel-zone { width: 44%; height: 62%; }
+    #wheel { left: 2.4vmin; bottom: 2.2vmin;
+             width: clamp(140px, 45vmin, 280px); height: clamp(140px, 45vmin, 280px); }
+    #controls-right { right: 2.2vmin; bottom: 2.2vmin; }
+    /* rotated, the corners are roomy: bigger wheel, bigger buttons */
+    .ctrl-btn { width: clamp(56px, 18vmin, 104px); height: clamp(56px, 18vmin, 104px); }
+    .pedal { height: clamp(64px, 19vmin, 132px); }
+    .pedal-boost { width: clamp(76px, 21vmin, 155px); }
+    .pedal-brake { width: clamp(92px, 26vmin, 190px); }
+    /* menus go sideways too, so nothing has to be scrolled to be reached */
+    #start-screen { flex-direction: row; flex-wrap: wrap; align-content: safe center;
+                    align-items: flex-start; gap: 10px; }
+    #start-screen > h1, #start-screen > .subtitle:first-of-type { flex: 0 0 100%; }
+    #start-screen > .subtitle:not(:first-of-type) { display: none; }
+    #start-screen > .lobby-box { flex: 1 1 200px; max-width: 260px; margin-bottom: 0; }
+    #waiting-screen > .lobby-box { height: auto !important; max-height: 26vh; }
+    .overlay { padding: 12px; }
+    h1 { font-size: 2rem; }
+    .subtitle { margin-bottom: 10px; }
+    .lobby-box { padding: 10px; margin-bottom: 8px; }
+    .btn-main { padding: 9px 26px; font-size: 0.8rem; }
+}
+@media (orientation: landscape) and (max-height: 420px) {
+    h1 { font-size: 1.5rem; }
+    .subtitle { font-size: 0.62rem; margin-bottom: 6px; }
+    .lobby-box { padding: 7px; margin-bottom: 6px; }
+    .lobby-input { padding: 6px; font-size: 0.8rem; }
+    .btn-main { padding: 7px 20px; font-size: 0.72rem; margin-top: 6px; }
+    .btn-small { padding: 8px 16px; font-size: 0.72rem; }
+}
