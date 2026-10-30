@@ -51,10 +51,9 @@ await import('../script.js');
 const A = grab();
 
 const fire = () => { const cb = rafCb; rafCb = null; if (cb) cb(0); };
-/* A frame with a driver in it. The road does not steer the car any more, so
-   anything that just holds the wheel still ends up in the barrier -- which is
-   the point of the change, but it makes every speed measurement a lie. This
-   keeps the car on the road the way a player would. */
+/* A frame with a driver in it: keeps the car centred the way a player
+   would after the tests above have thrown it around, so the speed
+   measurements read clean cruising rather than barrier scrapes. */
 const drive = (n = 1) => { for (let i = 0; i < n; i++) {
     window.wheelSetAngle(Math.max(-120, Math.min(120, -window.carRoadOffset() * 3.6)));
     fire();
@@ -198,7 +197,6 @@ console.log('\n=== the road bends ===');
        sideways underneath you, which is what read as the car being swept the
        other way round the corner. Get it too right and you have a straight
        road again, so the bend up ahead is measured too. */
-    let slideNitro = 0, drift2s = 0;
     const bend2000 = [];
     for (let seed = 0; seed < 40; seed++) {
         reseedCurves(seed);
@@ -208,26 +206,14 @@ console.log('\n=== the road bends ===');
             w.setPlayer(0, 0, { steer: 0, brake: 0, boost: 0, phase: 0 });
             w.camera.updateMatrixWorld(true);
             bend2000.push(Math.abs(w.bendAt(-2000)));
-            /* Hands off the wheel for two seconds at cruise. The car keeps
-               its own line, so the road slides out from under it: this is the
-               drift that used to be stolen by the road steering for you. */
-            let off = 0;
-            for (let f = 0; f < 120; f++) {
-                w.scrollRoad(base + f * 12.8);
-                const before = w.centreUnderCar();
-                w.scrollRoad(base + (f + 1) * 12.8);
-                const slide = w.centreUnderCar() - before;
-                slideNitro = Math.max(slideNitro, Math.abs(slide) * 33.6 / 12.8);
-                off -= slide;                  // the road moved; the car did not
-            }
-            drift2s = Math.max(drift2s, Math.abs(off));
         }
     }
     const midBend = bend2000.sort((a, b) => a - b)[Math.floor(bend2000.length / 2)];
     ok(Math.abs(w.bendAt(0)) < 1e-9, 'a car sitting in the middle still has the road under it');
     ok(midBend > 60, `and it is a real curving road: the centre is ${midBend.toFixed(0)} units off, 2000u up the road`);
-    ok(drift2s > 40, `but the road does not steer the car: two hands-off seconds walk it ${drift2s.toFixed(0)} units off the middle`);
-    ok(slideNitro < 8, `and the wheel can always win: the road slides ${slideNitro.toFixed(1)} units a frame at BOOST, against a steering that can do 10`);
+    /* Whether the bends can push the CAR around is a gameplay question,
+       tested on the live game further down ("hands off the wheel"). The
+       geometry only has to be a proper bending road, measured above. */
     w.syncEnemies([{ style: 'f1', color: '#fff', wx: 0, wz: -1500, steer: 0, phase: 0 }], 160, 0);
     ok(Math.abs(w.enemyPool[0].car.position.x - w.bendAt(-1500)) < 1e-6 && w.enemyPool[0].car.position.x !== 0,
        `traffic follows the bend too (a car 1500u up the road sits ${w.enemyPool[0].car.position.x.toFixed(0)} units over)`);
@@ -744,8 +730,19 @@ console.log('\n=== hills, banking and the roadside city ===');
         const v = new THREE.Vector3(e[12], e[13] + 80, e[14]).project(w.camera);
         if (e[14] < 250 && Math.abs(v.x) < 1 && Math.abs(v.y) < 1) towersSeen++;
     }
-    ok(w.buildings.length === 2 && w.billboards.length === 8 && w.gBeams.count === 5 && w.lampHeads.count === 36,
-       'roadside built: towers, street lamps, billboards, gantries');
+    ok(w.buildings.length === 2 && w.posters.length === 4 && w.lampHeads.count === 36 && !w.billboards && !w.gBeams,
+       'roadside built: towers and street lamps with pole posters — nothing hangs over the road');
+    /* every poster stands clear of the tarmac and above the cars */
+    let posterClear = 1e9, posterBase = 1e9, posterNan = 0;
+    for (const pm of w.posters) for (let i = 0; i < pm.count; i++) {
+        pm.getMatrixAt(i, m4);
+        const e = m4.elements;
+        if (e.some(n => !isFinite(n))) posterNan++;
+        posterClear = Math.min(posterClear, Math.abs(e[12] - w.bendAt(e[14])) - 11.5);
+        posterBase = Math.min(posterBase, (e[13] - 20) - w.terrainYAt(e[14], e[12] - w.bendAt(e[14])));
+    }
+    ok(posterClear > 225 && posterBase > 21 && posterNan === 0,
+       `posters ride on the poles at the shoulder (inner edge ${posterClear.toFixed(0)}u out, bottom ${posterBase.toFixed(0)}u up)`);
     ok(towersSeen > 4, `and visible from the driver's seat (${towersSeen} towers in frame)`);
     ok(clear > 230 && nan === 0, `standing clear of the tarmac (nearest face ${clear.toFixed(0)}u out, no NaNs)`);
     reseedCurves(CURVE_SEED);
@@ -785,6 +782,29 @@ const at30 = burst(30, 1000 / 30);
 console.log(`  one second from rest: 30Hz ${at30} | 60Hz ${at60} | 120Hz ${at120}`);
 ok(at60 > 120 && Math.abs(at120 - at60) < at60 * 0.14 && Math.abs(at30 - at60) < at60 * 0.18,
    'a 120Hz phone no longer runs the game at double speed');
+
+/* =================================================================== */
+console.log('\n=== hands off the wheel, the car simply goes straight ===');
+/* Regression lock for the auto-turn bug: the player update used to slide
+   the car sideways by however far the road centreline had moved under
+   it each frame, so a hands-off car drifted to the barrier on straights
+   and was pushed against every bend. Now nothing but steering (and the
+   barriers) may move the car across the road. */
+window.playSolo();
+let maxOff = 0;
+for (let i = 0; i < 900; i++) { fire(); maxOff = Math.max(maxOff, Math.abs(window.carRoadOffset())); }
+console.log(`  900 frames, no steering input at all: worst offset ${maxOff.toFixed(2)} units`);
+ok(maxOff < 2, 'no steering, no wandering: the car holds the middle on straights and bends alike');
+window.playSolo();
+for (let i = 0; i < 30; i++) { window.wheelSetAngle(72); fire(); }   // steer out to a lane
+window.wheelSetAngle(0);
+for (let i = 0; i < 40; i++) fire();                                  // let the slide settle
+const laneOff = window.carRoadOffset();
+let laneDrift = 0;
+for (let i = 0; i < 900; i++) { fire(); laneDrift = Math.max(laneDrift, Math.abs(window.carRoadOffset() - laneOff)); }
+console.log(`  steered to offset ${laneOff.toFixed(0)}, then 900 hands-off frames drifted ${laneDrift.toFixed(2)}`);
+ok(Math.abs(laneOff) > 40, 'steered out of the middle first, so the lane-hold is meaningful');
+ok(laneDrift < 3, 'and it holds that exact lane through whatever the road does next');
 
 console.log(fail ? `\n${fail} CHECK(S) FAILED` : '\nALL CHECKS PASSED');
 process.exit(fail ? 1 : 0);
