@@ -3,21 +3,15 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <meta name="description" content="NEON DRIVE is a neon 3D multiplayer racing game with realistic driving physics, solo practice, quick matches, private rooms, nitro and abilities.">
-    <meta name="application-name" content="NEON DRIVE">
-    <meta name="theme-color" content="#04050c">
-    <meta name="color-scheme" content="dark">
-    <meta name="mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-capable" content="yes">
-    <meta name="apple-mobile-web-app-title" content="NEON DRIVE">
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="format-detection" content="telephone=no">
-    <title>NEON DRIVE - Multiplayer Racing Game</title>
-    <link rel="manifest" href="manifest.webmanifest">
-    <link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
-    <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
-    <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon.png">
-    <link rel="stylesheet" href="style.css">
+    <title>NEON DRIVE - MULTIPLAYER</title>
+    <!-- Styles are split by screen area. Keep this order: later files refine earlier ones. -->
+    <link rel="stylesheet" href="src/css/base.css">
+    <link rel="stylesheet" href="src/css/screens.css">
+    <link rel="stylesheet" href="src/css/hud.css">
+    <link rel="stylesheet" href="src/css/controls.css">
+    <link rel="stylesheet" href="src/css/lobby-extras.css">
+    <link rel="stylesheet" href="src/css/responsive.css">
+    <link rel="stylesheet" href="src/css/rotate-lock.css">
 </head>
 <body>
 
@@ -104,7 +98,6 @@
             </div>
             
             <button class="btn-small" onclick="playSolo()" style="margin-top: 10px;">Play Solo Practice</button>
-            <button id="install-app-btn" class="btn-small pwa-install-btn" type="button" hidden>📲 Install App</button>
             <div class="page-footer">was designed by imrul hasan, credit: Arena Agent</div>
         </div>
 
@@ -169,11 +162,10 @@
     <script type="importmap">
     {
         "imports": {
-            "three": "./vendor/three.min.js"
+            "three": "./src/vendor/three.min.js"
         }
     }
     </script>
-    <script type="module" src="script.js"></script>
-    <script src="pwa.js" defer></script>
+    <script type="module" src="src/js/game/main.js"></script>
 </body>
 </html>

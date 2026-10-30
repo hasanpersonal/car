@@ -3,7 +3,7 @@
    -----------------------------------------------------------------------------
    Owns the renderer, the chase camera, the road and the pooled objects
    (traffic cars, bullets, pickups, particles). It renders game state; it
-   never decides anything. All rules stay in script.js.
+   never decides anything. All rules stay in ../game/main.js.
 
    Camera framing is the fix for "controllers hide the car": the car is
    pinned to 40% of the screen height, so the bottom half of the phone is
@@ -12,6 +12,17 @@
 
 import * as THREE from 'three';
 import { buildCar, acquireCar, releaseCar, glowTexture, CAR } from './car3d.js';
+import {
+    BANK_GAIN, BANK_MAX, bendRateAt, centreAt, curveGeneration, elevAt,
+    gradeAt, hash1, slopeAt, trackCurvatureAtS, trackHeadingAtS
+} from './track.js';
+import { makeRibbon } from './ribbon.js';
+import { facadeTextures, posterTextures, skylineTexture } from './textures.js';
+import { CAM, CAM_KEYS, CAM_TALL, CAM_WIDE, camBlend } from './camera.js';
+
+export { CAM, camBlend };
+
+export { reseedCurves } from './track.js';
 
 const ROAD_W = 440;                 // same as the 2D road (screen x 20..460)
 const ROAD_HALF = ROAD_W / 2;
@@ -25,283 +36,6 @@ const FAR_Z = -7200;                // ... and this far ahead
 const VIEW_FAR = 5800;              // fog reaches full opacity here
 const SPAN = NEAR_Z - FAR_Z;
 const ROAD_SEGS = 150;              // the tarmac is a ribbon this many quads long
-
-/* ------------------------------------------------------------------ *
- *  ROAD SHAPE
- *  A straight road is dull, so the centreline is a sum of three sines
- *  over distance travelled: long sweepers, real bends, and a ripple so
- *  it never reads as a plain arc. Re-seeded every race, so no two runs
- *  are alike and it never loops.
- *  The road is its own object: it is drawn where its centreline runs,
- *  relative to where that centreline is under the car, and nothing in it
- *  is measured against the car. So a car that is going straight does not
- *  stay on the road — the road curves out from under it and the driver
- *  has to answer with the wheel. Measuring it against the car (which is
- *  what it used to do) glued the car to the centreline, and that was the
- *  car following the bends with nobody steering.
- * ------------------------------------------------------------------ */
-const CURVE_BANDS = [
-    { wave: 2600, amp: 420 },       // long sweepers
-    { wave: 1250, amp: 110 },       // the bends you actually steer for
-    { wave: 620, amp: 20 }          // ripple, so it is never a plain arc
-];
-const CURVE = CURVE_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
-/* The road also rises and falls: two sine bands over distance, seeded
-   with the bends, normalised so the grade never exceeds 5%. script.js
-   reads the grade under the car and turns it into gravity, so a crest
-   is something you feel in the speed, not just something you see. */
-const ELEV_BANDS = [
-    { wave: 950, amp: 30 },         // long crests and dips
-    { wave: 420, amp: 9 }           // shorter undulations
-];
-const ELEV = ELEV_BANDS.map(() => ({ wave: 1, amp: 0, phase: 0 }));
-const MAX_GRADE = 0.05;
-/* Corners are banked: the tarmac tilts into the bend, outside edge up,
-   by an amount proportional to how hard the road is curving there. */
-const BANK_GAIN = 1050, BANK_MAX = 0.13;
-/* How hard the road is allowed to turn away from the car. The car no longer
-   follows the centreline by itself, so a bend steeper than the steering can
-   answer is a bend that simply carries you into the barrier whatever you do.
-   Whole road is scaled by this, not band by band, so a steep seed stays
-   drivable while a gentle one keeps its full sweep. */
-const MAX_ROAD_SLOPE = 0.08;
-/* bumped every time the bends are re-seeded, so anything caching a position
-   on the old road knows to measure itself again */
-let CURVE_GEN = 0;
-function mulberry32(a) {
-    return function () {
-        a = a + 0x6D2B79F5 | 0;
-        let t = Math.imul(a ^ a >>> 15, 1 | a);
-        t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
-        return ((t ^ t >>> 14) >>> 0) / 4294967296;
-    };
-}
-/* no seed (the normal case) means a fresh random set of bends; a seed makes
-   a shape reproducible, which is what the test harness needs */
-export function reseedCurves(seed) {
-    const rnd = seed === undefined ? Math.random : mulberry32(seed | 0);
-    CURVE_BANDS.forEach((b, i) => {
-        CURVE[i].wave = b.wave * (0.80 + rnd() * 0.45);
-        CURVE[i].amp = b.amp * (0.55 + rnd() * 0.90);
-        CURVE[i].phase = rnd() * Math.PI * 2;
-    });
-    const slope = CURVE.reduce((t, c) => t + c.amp / c.wave, 0);
-    if (slope > MAX_ROAD_SLOPE) for (const c of CURVE) c.amp *= MAX_ROAD_SLOPE / slope;
-    ELEV_BANDS.forEach((b, i) => {
-        ELEV[i].wave = b.wave * (0.80 + rnd() * 0.45);
-        ELEV[i].amp = b.amp * (0.55 + rnd() * 0.90);
-        ELEV[i].phase = rnd() * Math.PI * 2;
-    });
-    const grade = ELEV.reduce((t, c) => t + c.amp / c.wave, 0);
-    if (grade > MAX_GRADE) for (const c of ELEV) c.amp *= MAX_GRADE / grade;
-    CURVE_GEN++;            // a new race is a new road: drop any stale cache
-}
-reseedCurves();
-/* lateral offset of the road centre at absolute distance S along it */
-const centreAt = (S) =>
-    CURVE[0].amp * Math.sin(S / CURVE[0].wave + CURVE[0].phase) +
-    CURVE[1].amp * Math.sin(S / CURVE[1].wave + CURVE[1].phase) +
-    CURVE[2].amp * Math.sin(S / CURVE[2].wave + CURVE[2].phase);
-/* and its slope, which is what sets the heading of everything sitting on it */
-const slopeAt = (S) =>
-    CURVE[0].amp / CURVE[0].wave * Math.cos(S / CURVE[0].wave + CURVE[0].phase) +
-    CURVE[1].amp / CURVE[1].wave * Math.cos(S / CURVE[1].wave + CURVE[1].phase) +
-    CURVE[2].amp / CURVE[2].wave * Math.cos(S / CURVE[2].wave + CURVE[2].phase);
-/* how hard the heading itself is changing — the curvature that banks the road */
-const bendRateAt = (S) =>
-    -(CURVE[0].amp / (CURVE[0].wave * CURVE[0].wave) * Math.sin(S / CURVE[0].wave + CURVE[0].phase) +
-      CURVE[1].amp / (CURVE[1].wave * CURVE[1].wave) * Math.sin(S / CURVE[1].wave + CURVE[1].phase) +
-      CURVE[2].amp / (CURVE[2].wave * CURVE[2].wave) * Math.sin(S / CURVE[2].wave + CURVE[2].phase));
-/* road height and grade (rise per unit travelled) at absolute distance S */
-const elevAt = (S) =>
-    ELEV[0].amp * Math.sin(S / ELEV[0].wave + ELEV[0].phase) +
-    ELEV[1].amp * Math.sin(S / ELEV[1].wave + ELEV[1].phase);
-const gradeAt = (S) =>
-    ELEV[0].amp / ELEV[0].wave * Math.cos(S / ELEV[0].wave + ELEV[0].phase) +
-    ELEV[1].amp / ELEV[1].wave * Math.cos(S / ELEV[1].wave + ELEV[1].phase);
-/* The track's own direction in mathematical (not three.js Euler) terms:
-   positive heading veers toward +x/right as distance increases. script.js
-   integrates the player's independent heading against this. Curvature is
-   d(heading)/d(arc length) for the centreline graph x = centreAt(S). */
-const trackHeadingAtS = (S) => Math.atan(slopeAt(S));
-const trackCurvatureAtS = (S) => {
-    const m = slopeAt(S);
-    return bendRateAt(S) / Math.pow(1 + m * m, 1.5);
-};
-/* stable per-index pseudo-random, so roadside furniture keeps its size
-   and offset every frame while its position wraps down the road */
-const hash1 = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
-
-/* A ribbon: a strip of quads running the length of the road, rebuilt every
-   frame so it can follow the bend. Used for the tarmac, the neon barriers
-   and their glow, all of which used to be one straight slab each. */
-function makeRibbon(segments, material, normal) {
-    const count = segments + 1;
-    const geo = new THREE.BufferGeometry();
-    const uv = new Float32Array(count * 2 * 2);
-    for (let i = 0; i < count; i++) {                 // v runs 0..1 along the road
-        const v = i / segments;
-        uv[i * 4 + 0] = 0; uv[i * 4 + 1] = v;
-        uv[i * 4 + 2] = 1; uv[i * 4 + 3] = v;
-    }
-    const idx = new Uint16Array(segments * 6);
-    for (let i = 0; i < segments; i++) {
-        const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
-        idx.set([a, b, d, a, d, c], i * 6);
-    }
-    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 2 * 3), 3));
-    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    if (normal) {
-        const nrm = new Float32Array(count * 2 * 3);
-        for (let i = 0; i < count * 2; i++) nrm.set(normal, i * 3);
-        geo.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
-    }
-    geo.setIndex(new THREE.BufferAttribute(idx, 1));
-    const mesh = new THREE.Mesh(geo, material);
-    mesh.frustumCulled = false;               // it always spans the whole road
-    return mesh;
-}
-
-/* ------------------------------------------------------------------ *
- *  Roadside textures, drawn once and shared by every World: tower
- *  facades with lit windows, neon signs, and the far skyline that sits
- *  on the horizon. All in the game's cyan / pink neon palette.
- * ------------------------------------------------------------------ */
-let _facades = null;
-function facadeTextures() {
-    if (_facades) return _facades;
-    const palettes = [
-        ['#9ffcff', '#00f0ff', '#00f0ff', '#dfeaff', '#ff7ad9', '#ffea00'],
-        ['#ffb3d9', '#ff0055', '#ff7ad9', '#dfeaff', '#00f0ff', '#ffea00']
-    ];
-    _facades = palettes.map((pal, v) => {
-        const c = document.createElement('canvas');
-        c.width = 128; c.height = 256;
-        const g = c.getContext('2d');
-        g.fillStyle = v ? '#0a0614' : '#060a15'; g.fillRect(0, 0, 128, 256);
-        for (let y = 12; y < 248; y += 11) for (let x = 8; x < 116; x += 16) {
-            if (Math.random() < 0.42) {
-                g.globalAlpha = 0.55 + Math.random() * 0.45;
-                g.fillStyle = pal[Math.floor(Math.random() * pal.length)];
-            } else { g.globalAlpha = 1; g.fillStyle = 'rgba(160,190,255,0.05)'; }
-            g.fillRect(x, y, 9, 6);
-        }
-        g.globalAlpha = 1;
-        g.fillStyle = v ? '#ff0055' : '#00f0ff'; g.fillRect(0, 0, 128, 3);   // rooftop strip
-        const t = new THREE.CanvasTexture(c);
-        t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-        return t;
-    });
-    return _facades;
-}
-
-/* Portrait posters for the lamp poles: one short word stacked letter
-   by letter, the way real pole banners read, over a small strapline. */
-let _posters = null;
-function posterTextures() {
-    if (_posters) return _posters;
-    const specs = [
-        { w: 'NEON', s: 'DRIVE', c: '#00f0ff' },
-        { w: 'NITRO', s: 'MAX BOOST', c: '#ff0055' },
-        { w: 'TURBO', s: 'CITY', c: '#ffea00' },
-        { w: 'APEX', s: 'RACING CLUB', c: '#00ff66' }
-    ];
-    _posters = specs.map(spec => {
-        const c = document.createElement('canvas');
-        c.width = 256; c.height = 448;
-        const g = c.getContext('2d');
-        g.fillStyle = '#04060d'; g.fillRect(0, 0, 256, 448);
-        g.strokeStyle = spec.c; g.lineWidth = 9; g.strokeRect(11, 11, 234, 426);
-        g.strokeStyle = 'rgba(255,255,255,0.32)'; g.lineWidth = 2; g.strokeRect(24, 24, 208, 400);
-        g.fillStyle = spec.c; g.fillRect(24, 24, 208, 12);            // header bar
-        g.textAlign = 'center'; g.textBaseline = 'middle';
-        g.shadowColor = spec.c; g.shadowBlur = 22;
-        g.fillStyle = spec.c;
-        g.font = 'italic 900 84px "Segoe UI", Roboto, sans-serif';
-        const letters = spec.w.split('');
-        const stepY = 72, blockH = letters.length * stepY;
-        let cy = 46 + (356 - blockH) / 2 + stepY / 2;                 // centred above the strapline
-        for (const ch of letters) { g.fillText(ch, 128, cy); cy += stepY; }
-        g.shadowBlur = 9; g.fillStyle = '#eaf4ff';
-        g.font = 'bold 27px "Segoe UI", Roboto, sans-serif';
-        g.fillText(spec.s, 128, 408);
-        const t = new THREE.CanvasTexture(c);
-        t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
-        return t;
-    });
-    return _posters;
-}
-
-let _skyline = null;
-function skylineTexture() {
-    if (_skyline) return _skyline;
-    const c = document.createElement('canvas');
-    c.width = 2048; c.height = 512;
-    const g = c.getContext('2d');
-    /* horizon glow: synthwave dusk fading up into the night */
-    const grad = g.createLinearGradient(0, 140, 0, 512);
-    grad.addColorStop(0, 'rgba(90,30,150,0)');
-    grad.addColorStop(0.55, 'rgba(150,40,160,0.30)');
-    grad.addColorStop(0.8, 'rgba(255,45,120,0.17)');
-    grad.addColorStop(1, 'rgba(4,5,12,0.96)');
-    g.fillStyle = grad; g.fillRect(0, 140, 2048, 372);
-    /* mountain ridge behind the city */
-    g.fillStyle = '#0a1026'; g.beginPath(); g.moveTo(0, 512);
-    let my = 330;
-    for (let x = 0; x <= 2048; x += 64) { my = 300 + hash1(x * 0.37 + 5) * 80; g.lineTo(x, my); }
-    g.lineTo(2048, 512); g.closePath(); g.fill();
-    /* city blocks with lit windows */
-    for (let x = -20; x < 2048; x += 26 + hash1(x) * 55) {
-        const w = 30 + hash1(x * 1.7) * 70, h = 70 + hash1(x * 2.3) * 190;
-        g.fillStyle = '#05070f'; g.fillRect(x, 512 - h, w, h);
-        if (hash1(x * 3.1) > 0.72) g.fillRect(x + w / 2 - 1, 512 - h - 16, 2, 16);   // antenna
-    }
-    const dotCols = ['#00f0ff', '#ff7ad9', '#ffea00', '#dfeaff'];
-    for (let i = 0; i < 1100; i++) {
-        g.globalAlpha = 0.35 + Math.random() * 0.65;
-        g.fillStyle = dotCols[i % 4];
-        g.fillRect(Math.random() * 2048, 372 + Math.random() * 132, 2.5, 2.5);
-    }
-    g.globalAlpha = 1;
-    _skyline = new THREE.CanvasTexture(c);
-    _skyline.wrapS = THREE.RepeatWrapping; _skyline.repeat.set(2, 1);
-    _skyline.colorSpace = THREE.SRGBColorSpace;
-    return _skyline;
-}
-
-/* Chase camera constants (tunable from the console via the exported object).
-   These were solved numerically: the car's bounding
-   box was projected on six device shapes with the car in the centre lane and
-   pushed to the outermost lane, minimising off-screen area, top clipping,
-   intrusion into the bottom thumb zone and a horizon outside 4-40%.
-   Result: the car's centre sits at 62% of screen height (top 55%, bottom 70%)
-   on every phone shape, 117-154 px tall, horizon at 10%. The SHOOT buttons
-   do not start until ~87%, so the car still clears them by a wide margin. */
-export const CAM = {
-    fov: 60,
-    follow: 1,          // how much the camera slides sideways with the car.
-                        // 1 = it sits on the car, so the car never drifts off
-                        // the centre of the screen and it is the road that
-                        // moves under you
-    camY: 220,          // camera height above the road
-    camZ: 330,          // camera distance behind the car
-    lookY: -90,         // aim point: below road level, well up the track
-    lookZ: -340         // shallow aim: drops the car to ~62% of screen height
-};
-
-/* The same rig, solved for a phone on its side. Portrait keeps the road
-   wider than the screen, so a landscape view has to zoom IN or the road
-   shrinks to a 45%-wide strip with a 40px car on it. Aiming further down
-   the track flattens the pitch, which puts the horizon back in frame and
-   drops the car to ~75-92% of the height — low, where a rotated phone has
-   the most room, with the whole road ahead visible. */
-const CAM_WIDE = { fov: 38, camY: 185, camZ: 310, lookY: -90, lookZ: -700 };
-const CAM_KEYS = ['fov', 'camY', 'camZ', 'lookY', 'lookZ'];
-const CAM_TALL = { fov: 60, camY: 220, camZ: 330, lookY: -90, lookZ: -340 };
-/* 0 at aspect 0.72 (every portrait phone), 1 at 1.75 and wider */
-export function camBlend(aspect) {
-    return Math.max(0, Math.min(1, (aspect - 0.72) / (1.75 - 0.72)));
-}
 
 export class World {
     constructor(canvas) {
@@ -1065,8 +799,8 @@ export class World {
        because the camera rides with the car. */
     _syncCurve() {
         if (this._c0off === this.roadOffset && this._c0z === this._playerZ &&
-            this._cgen === CURVE_GEN) return;
-        this._c0off = this.roadOffset; this._c0z = this._playerZ; this._cgen = CURVE_GEN;
+            this._cgen === curveGeneration()) return;
+        this._c0off = this.roadOffset; this._c0z = this._playerZ; this._cgen = curveGeneration();
         this._s0 = this.roadOffset + NEAR_Z - this._playerZ;
         this._centre0 = centreAt(this._s0);
         this._slope0 = slopeAt(this._s0);
@@ -1083,7 +817,7 @@ export class World {
         return centreAt(this.roadSAt(z)) - this._centre0;
     }
     /* The track frame at an absolute station S. These are the numbers the
-       vehicle physics in script.js integrate against: the road has a heading
+       vehicle physics in ../game/main.js integrate against: the road has a heading
        and curvature of its own, and the car has a separate heading that only
        the steering can change. */
     trackHeadingAtS(S) { return trackHeadingAtS(S); }
@@ -1136,7 +870,7 @@ export class World {
                Math.max(0, Math.abs(xoff) - 250) * 0.055;
     }
     /* the actual grade under the car (rise per unit forward) — the one
-       absolute number script.js needs, to turn hills into gravity */
+       absolute number ../game/main.js needs, to turn hills into gravity */
     roadGrade() { this._syncCurve(); return this._grade0; }
 
     /* rebuild the tarmac, the barriers and their glow along the current
@@ -1288,7 +1022,7 @@ export class World {
            match the road: on a bend with the wheel untouched the nose keeps
            its world direction and the road turns away underneath, exactly
            as in a driving simulator. On top of the heading sit the body
-           motions script.js works out: pitch under power/brakes, roll in
+           motions ../game/main.js works out: pitch under power/brakes, roll in
            corners, and a touch of slip yaw when the tyres slide. */
         const heading = Number.isFinite(opts.heading) ? opts.heading : 0;
         car.rotation.set(opts.pitch || 0,
@@ -1595,7 +1329,7 @@ export class World {
     }
 }
 
-/* world coordinates helpers used by script.js (old screen px -> 3D) */
+/* world coordinates helpers used by ../game/main.js (old screen px -> 3D) */
 export const SCREEN_CENTRE_X = 240;
 export const PLAYER_SCREEN_Y = 690;
 export const wx = (screenX) => screenX - SCREEN_CENTRE_X;

@@ -1,0 +1,46 @@
+/* NEON DRIVE — lobby-extras.css: Chat scrollbar, short-screen lobby sizing, quick match and page footer. */
+/* Chat Styling */
+#chat-messages::-webkit-scrollbar { width: 4px; }
+#chat-messages::-webkit-scrollbar-thumb { background: rgba(0, 240, 255, 0.4); border-radius: 2px; }
+
+/* Sticky Footer */
+/* Short screens (most phones in portrait): compact the lobby so all three
+   boxes, the divider and the practice button stay reachable. */
+@media (max-height: 780px) {
+    .overlay { padding: 14px 12px; justify-content: flex-start; }
+    h1 { font-size: 2rem; letter-spacing: 2px; }
+    .subtitle { font-size: 0.72rem; margin-bottom: 10px; letter-spacing: 2px; }
+    .lobby-box { padding: 10px; margin-bottom: 8px; }
+    .slot-title { font-size: 0.68rem; margin-bottom: 6px; }
+    .lobby-input { padding: 8px; font-size: 0.85rem; }
+    .btn-main { padding: 10px 30px; font-size: 0.85rem; margin-top: 8px; }
+    .btn-small { padding: 10px 20px; font-size: 0.8rem; }
+    .button-group { margin-top: 12px; }
+    .search-status { min-height: 12px; margin-top: 6px; font-size: 0.62rem; }
+}
+
+/* quick match: sits at the top of the start screen */
+.quick-match {
+    border-color: rgba(0, 255, 102, 0.55) !important;
+    box-shadow: 0 0 18px rgba(0, 255, 102, 0.18), inset 0 0 18px rgba(0, 255, 102, 0.05);
+}
+.quick-match .slot-title { color: #00ff66; }
+.btn-random {
+    background: linear-gradient(45deg, #00ff66, #00c07a) !important;
+    box-shadow: 0 0 18px rgba(0, 255, 102, 0.45) !important;
+    color: #04120a !important;
+}
+.btn-random:active { transform: scale(0.96); }
+.search-status {
+    margin-top: 8px; min-height: 14px; font-size: 0.7rem; font-weight: bold;
+    color: #00ff66; letter-spacing: 0.5px; text-shadow: 0 0 6px rgba(0,255,102,0.5);
+}
+
+.page-footer {
+    margin-top: auto;
+    padding-top: 15px;
+    font-size: 0.7rem;
+    color: #5d6d8f;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+}

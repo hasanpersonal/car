@@ -2,5 +2,5 @@
 # dependencies (the test harness reinstalls these)
 node_modules/
 
-# the symlink run.sh creates so scene3d.js can resolve bare "three" imports
+# the symlink run.sh creates so the source modules can resolve bare "three" imports
 /node_modules

@@ -5,7 +5,7 @@ import * as THREE from 'three';
 const W = 844, H = 390, COLS = 84, ROWS = 26;
 const env = makeEnv(W, H);
 globalThis.document = env.doc; globalThis.window = env.win; globalThis.self = env.win;
-const { World, reseedCurves } = await import('../scene3d.js');
+const { World, reseedCurves } = await import('../src/js/world/scene3d.js');
 const w = new World(env.gameCanvas); w.renderer.render = () => {};
 w.resize(); w._playerZ = 0;
 const sx = (x, y, z) => { const v = new THREE.Vector3(x, y, z).project(w.camera); return (v.x + 1) / 2 * W; };

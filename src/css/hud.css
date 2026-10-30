@@ -1,0 +1,73 @@
+/* NEON DRIVE — hud.css: In-race score, speed, timer, distance tracker and nitro readouts. */
+/* Readouts hug the two top corners: the whole middle of the screen stays
+   road, which is what makes the game work with the phone on its side. */
+#hud { position: absolute; top: 0; left: 0; right: 0; bottom: 0; z-index: 10; pointer-events: none; display: none; }
+.hud-cluster {
+    position: absolute; top: clamp(6px, 1.8vmin, 16px);
+    display: flex; flex-direction: column; gap: clamp(4px, 1.1vmin, 10px);
+}
+#hud-left { left: clamp(6px, 1.8vmin, 16px); align-items: flex-start; }
+#hud-right { right: clamp(6px, 1.8vmin, 16px); align-items: flex-end; }
+/* Glass HUD: the road ahead stays visible through every readout. Drop the
+   backdrop-filter lines below if a very old phone struggles with them. */
+.hud-item {
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.42) 0%, rgba(5, 5, 15, 0.18) 100%);
+    border: 1px solid rgba(0, 240, 255, 0.28);
+    padding: 4px 12px; border-radius: 6px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.hud-label {
+    font-size: 0.6rem; color: #a8bce8; letter-spacing: 2px; font-weight: bold;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+.hud-val {
+    font-size: 1.2rem; font-weight: 900; color: #fff; font-family: monospace;
+    text-shadow: 0 0 8px #00f0ff, 0 2px 5px rgba(0, 0, 0, 0.95);
+}
+
+/* Distance Tracker Design */
+#distance-tracker {
+    /* hangs under SCORE and SPEED, in the corner, out of the way of the road */
+    width: clamp(132px, 34vmin, 240px); box-sizing: border-box;
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.40) 0%, rgba(5, 5, 15, 0.16) 100%);
+    border: 1px solid rgba(0, 240, 255, 0.22);
+    padding: 5px 10px;
+    border-radius: 8px;
+    margin-bottom: 6px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.tracker-label {
+    font-size: 0.55rem;
+    color: #a8bce8;
+    letter-spacing: 1.5px;
+    font-weight: bold;
+    margin-bottom: 4px;
+    text-shadow: 0 1px 3px rgba(0, 0, 0, 0.95);
+}
+.tracker-bg {
+    position: relative;
+    height: 16px;
+    background: rgba(0, 0, 0, 0.32);
+    border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.16);
+}
+.player-progress-dot {
+    position: absolute;
+    top: 2px;
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    box-shadow: 0 0 10px currentColor;
+    transition: left 0.2s linear;
+}
+
+.nitro-container {
+    display: flex; align-items: center;
+    background: linear-gradient(180deg, rgba(5, 5, 15, 0.38) 0%, rgba(5, 5, 15, 0.16) 100%);
+    border: 1px solid rgba(255, 0, 85, 0.28); padding: 6px 12px; border-radius: 20px; gap: 10px;
+    backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.nitro-title { font-size: 0.65rem; font-weight: 900; color: #ff0055; letter-spacing: 1px; text-shadow: 0 0 10px rgba(255,0,85,0.5), 0 1px 3px rgba(0,0,0,0.95); }
+.nitro-bar-bg { flex-grow: 1; height: 10px; background: rgba(0, 0, 0, 0.35); border-radius: 5px; overflow: hidden; border: 1px solid rgba(255, 255, 255, 0.15); }
+.nitro-bar-fill { width: 0%; height: 100%; background: linear-gradient(90deg, #ff0055, #ffea00, #00ff66); box-shadow: 0 0 15px #ff0055; transition: width 0.1s linear; }
+.nitro-percent { font-family: monospace; font-size: 0.85rem; font-weight: 900; color: #00f0ff; min-width: 40px; text-align: right; text-shadow: 0 0 5px #00f0ff, 0 1px 3px rgba(0,0,0,0.95); }
