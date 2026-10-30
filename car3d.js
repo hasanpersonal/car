@@ -412,10 +412,15 @@ export function buildCar(style = 'f1', color = '#ff0055') {
                 f.scale.set(0.8, 0.6 + v * 0.9, 0.8);
             }
         },
-        spinWheels(phase, steer) {
+        /* dist = distance the car itself has travelled; each hub's height
+           is its wheel radius, so angle = dist / r is a wheel rolling
+           without slip — and the smaller fronts spin faster than the
+           rears, as they should */
+        spinWheels(dist, steer) {
             for (const w of wheels) {
-                w.children[0].rotation.x = phase;
-                w.children[1].rotation.x = phase;
+                const a = -dist / w.position.y;   // forward is -z: tops roll forward
+                w.children[0].rotation.x = a;
+                w.children[1].rotation.x = a;
                 w.rotation.y = w.userData.front ? steer * 0.42 : 0;
             }
         }

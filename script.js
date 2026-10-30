@@ -59,6 +59,62 @@ const NPC_SPEED = 60;
 /* Top speeds: slower than before now that the road is busier. */
 const SPEED_CRUISE = 160, SPEED_NITRO = 420, SPEED_BRAKE = 60;
 
+/* ------------------------------------------------------------------ *
+ *  VEHICLE PHYSICS
+ *  The speed used to be one exponential lerp toward a target, so the
+ *  car launched like a catapult, braked like a wall and felt the same
+ *  uphill as down. It is a force balance now, in KMH per second:
+ *    engine  constant-power (force = P/v) under a traction cap, so the
+ *            launch is tyre-limited, then the shove fades with speed;
+ *    drag    quadratic in speed plus a little rolling resistance;
+ *    brakes  strong but finite, easing off as the hold speed nears;
+ *    lift    engine braking on top of drag when you come off nitro;
+ *    grade   gravity along the road slope — hills genuinely pull;
+ *    scrub   cornering hard costs a little speed, like real tyres.
+ *  The driver still aims at the same three speeds as ever (cruise 160,
+ *  brake-hold 60, nitro 420) by working the throttle, which is why the
+ *  car holds its speed up a hill until the power runs out. The aim
+ *  point sits a few KMH past the target to cover the throttle droop.
+ * ------------------------------------------------------------------ */
+const PHYS = {
+    traction: 180, tractionNitro: 330,     // KMH/s the tyres can put down
+    power: 26000, powerNitro: 95000,       // engine force = power / (v + 55)
+    dragK: 0.00105,                        // aero drag, quadratic
+    rollR: 6,                              // rolling resistance, KMH/s
+    engineBrake: 70,                       // lift-off decel cap, KMH/s
+    brakeMax: 310,                         // full-pedal decel, KMH/s
+    gradeK: 300                            // gravity per unit of road grade
+};
+let lonAccel = 0;                          // last frame's KMH/s, feeds body pitch
+let engineLoad = 0;                        // 0..1 throttle, feeds the engine note
+function longitudinalAccel(v, target, nitroOn, braking, grade, scrub) {
+    const aim = target + (braking ? 2 : 6);
+    const power = nitroOn ? PHYS.powerNitro : PHYS.power;
+    const traction = nitroOn ? PHYS.tractionNitro : PHYS.traction;
+    engineLoad = v < aim ? Math.min(1, (aim - v) / 18) : 0;
+    let a = engineLoad * Math.min(traction, power / (v + 55));
+    a -= PHYS.dragK * v * v + (v > 0.5 ? PHYS.rollR : 0);
+    a -= grade * PHYS.gradeK;
+    a -= scrub || 0;
+    if (braking && v > target) a -= PHYS.brakeMax * Math.min(1, (v - target) / 45);
+    else if (v > target) a -= Math.min(PHYS.engineBrake, (v - target) * 0.55);
+    return a;
+}
+
+/* Frame-rate independence: every per-frame constant in the game was
+   tuned at 60fps, so physics runs on a step scaled to that (1 at
+   60Hz, 0.5 at 120Hz, 2 at 30Hz). A missing or frozen timestamp —
+   first frame, backgrounded tab — safely reads as one 60fps step. */
+let physStep = 1, lastFrameTs = 0;
+function frameStep(ts) {
+    if (!ts || !lastFrameTs || ts <= lastFrameTs) { lastFrameTs = ts || lastFrameTs; return 1; }
+    const dt = (ts - lastFrameTs) / 1000;
+    lastFrameTs = ts;
+    return Math.max(0.25, Math.min(3, dt * 60));
+}
+/* a probability tuned per 60fps frame, rescaled to this frame's length */
+const chance = (p) => Math.random() < 1 - Math.pow(1 - p, physStep);
+
 /* --- race length: 2.5 minutes --- */
 const RACE_SECONDS = 150;
 /* races start with most of a tank: you can clear the first bit of traffic
@@ -747,13 +803,58 @@ class Player {
     constructor() {
         this.w = 44; this.h = 85;
         this.x = gameWidth / 2 - this.w / 2;
-        this.y = gameHeight - 160; 
+        this.y = gameHeight - 160;
         this.vx = 0; this.angle = 0;
+        /* steering rack, lateral grip and body-motion state */
+        this.steer = 0;              // actual front-wheel angle, -1..1
+        this.latAccel = 0;           // smoothed lateral KMH-ish/s for body roll
+        this.slip = 0;               // drift yaw (rad) when demand outruns grip
+        this.pitch = 0; this.pitchV = 0;   // suspension spring-dampers
+        this.roll = 0; this.rollV = 0;
     }
-    update() {
-        let targetVX = Math.abs(wheelAngle) > 0.5 ? wheelSteer() * 10 : (keys.a ? -8 : keys.d ? 8 : 0);
-        this.vx += (targetVX - this.vx) * 0.25;
-        this.x += this.vx; this.angle = this.vx * 0.012;
+    update(step = 1) {
+        const dt = step / 60;
+        /* --- steering: the wheel works through a rack, so the front
+           wheels chase your hands at a finite rate instead of snapping.
+           The wheel's response is slightly progressive, which keeps
+           small corrections near the centre precise. --- */
+        let input = 0;
+        if (Math.abs(wheelAngle) > 0.5) {
+            const ws = wheelSteer();
+            input = Math.sign(ws) * Math.pow(Math.abs(ws), 1.12);
+        } else input = keys.a ? -0.8 : keys.d ? 0.8 : 0;
+        const rack = (input - this.steer) * (1 - Math.pow(0.72, step));
+        this.steer += Math.max(-0.14 * step, Math.min(0.14 * step, rack));
+
+        /* --- lateral grip: how much sideways pace the tyres can build.
+           A parked car cannot move sideways, authority ramps in with
+           speed, then tapers off when really fast so the car stays
+           stable instead of darty. Lateral acceleration is capped by
+           grip, and whatever demand the grip cannot meet shows up as
+           slip — the car yaws into the turn ahead of its travel. --- */
+        const ramp = Math.max(0, Math.min(1, speed / 55));
+        const taper = 1 - 0.22 * Math.max(0, Math.min(1, (speed - 190) / 230));
+        const desiredVX = this.steer * 10 * ramp * taper;
+        let dv = (desiredVX - this.vx) * (1 - Math.pow(1 - 0.24, step));
+        const maxLat = 2.6 * step;
+        dv = Math.max(-maxLat, Math.min(maxLat, dv));
+        this.vx += dv;
+        this.latAccel += ((dt > 0 ? dv / dt : 0) - this.latAccel) * (1 - Math.pow(0.65, step));
+        const slipTarget = -Math.max(-0.10, Math.min(0.10, (desiredVX - this.vx) * 0.008));
+        this.slip += (slipTarget - this.slip) * (1 - Math.pow(0.80, step));
+        this.x += this.vx * step;
+        this.angle = this.slip;
+
+        /* --- body motion: pitch under power/brakes, roll in corners,
+           each on its own stiff spring-damper so it settles with a
+           hint of overshoot instead of moving like a switch. --- */
+        const pitchT = Math.max(-0.055, Math.min(0.040, lonAccel * 0.00016));
+        this.pitchV += ((pitchT - this.pitch) * 135 - this.pitchV * 13) * dt;
+        this.pitch += this.pitchV * dt;
+        const rollT = Math.max(-0.06, Math.min(0.06, this.latAccel * 0.00042));
+        this.rollV += ((rollT - this.roll) * 120 - this.rollV * 12) * dt;
+        this.roll += this.rollV * dt;
+
         /* The road is a thing of its own now, and this car is not on rails.
            Hold the wheel straight and the road curves away from under you,
            so you walk towards the outside of the bend instead of being
@@ -765,29 +866,41 @@ class Player {
         }
         /* The barriers are solid. The road will not steer for you, but it
            will stop you leaving it -- at a cost, so sitting against the wall
-           is not a way to take a corner. */
+           is not a way to take a corner. Arrive at the wall already moving
+           sideways and it bounces you back off it like a real barrier;
+           merely lean on it and it just grinds the speed away. */
         const lo = 22, hi = gameWidth - 22 - this.w;
-        if(this.x < lo) { this.x = lo; if(this.vx < 0) this.vx = 0; this.scrape(); }
-        else if(this.x > hi) { this.x = hi; if(this.vx > 0) this.vx = 0; this.scrape(); }
+        if(this.x < lo) {
+            this.x = lo;
+            if(this.vx < -4.5) { this.vx = -this.vx * 0.22; speed *= 0.95; }
+            else if(this.vx < 0) this.vx = 0;
+            this.scrape(step);
+        }
+        else if(this.x > hi) {
+            this.x = hi;
+            if(this.vx > 4.5) { this.vx = -this.vx * 0.22; speed *= 0.95; }
+            else if(this.vx > 0) this.vx = 0;
+            this.scrape(step);
+        }
 
         /* --- exhaust trail (visual only) --- */
-        if(speed > 40 && Math.random() < 0.6) {
+        if(speed > 40 && chance(0.6)) {
             const tipX = this.x + this.w * (Math.random() < 0.5 ? 0.36 : 0.64);
             particles.push(new Particle(tipX, this.y + this.h * 0.84, isNitro ? '#00f0ff' : '#ff0055', -speed*0.03, Math.random()*4+1));
         }
-        /* --- tyre smoke when the car is thrown sideways or braked hard --- */
-        if(speed > 90 && (Math.abs(this.vx) > 6 || brakeActive) && Math.random() < 0.35) {
+        /* --- tyre smoke when the tyres are sliding or the brakes bite --- */
+        if(speed > 85 && (Math.abs(this.slip) > 0.045 || Math.abs(this.latAccel) > 95 || brakeActive) && chance(0.35)) {
             const side = this.vx > 0 ? 0.07 : 0.93;
             particles.push(new Particle(this.x + this.w * side, this.y + this.h * 0.80,
                 'rgba(190,196,215,0.55)', -speed*0.02, Math.random()*3+2));
         }
-        
-        this.y += ((gameHeight - 160) - this.y) * 0.05;
+
+        this.y += ((gameHeight - 160) - this.y) * (1 - Math.pow(0.95, step));
     }
     /* scraping the wall: it costs speed, it shakes the car, and it throws
        sparks off the side that is touching */
-    scrape() {
-        speed = Math.max(speed * 0.972, 0);
+    scrape(step = 1) {
+        speed = Math.max(speed * Math.pow(0.972, step), 0);
         if(world) {
             world.addShake(Math.min(7, Math.abs(speed) * 0.02 + 1));
             if(Math.random() < 0.5) world.spawnSplatter(
@@ -798,7 +911,9 @@ class Player {
     draw(hidden) {
         if(!world) return;
         world.setPlayer(wx(this.x + this.w / 2), wz(this.y + this.h / 2), {
-            steer: Math.max(-1, Math.min(1, this.vx / 9)),
+            steer: Math.max(-1, Math.min(1, this.steer)),
+            slip: this.slip, pitch: this.pitch, roll: this.roll,
+            speed01: Math.max(0, Math.min(1, speed / SPEED_NITRO)),
             brake: brakeActive ? 1 : 0,
             boost: isNitro ? 1 : 0,
             phase: roadOffset,
@@ -819,15 +934,82 @@ class Enemy {
         const shapes = ['f1', 'f2', 'f3', 'f4', 'f2'];
         this.style = shapes[Math.floor(Math.random() * shapes.length)];
         this.phaseOff = Math.random() * 400;
+        /* traffic with somewhere to be: each driver settles at their own
+           pace around the old uniform 60 — still the speed the brake
+           drops you to, so braking still slots you into the traffic —
+           follows the car in front instead of driving through it, and
+           changes lanes now and then when there is a proper gap. */
+        this.vCruise = NPC_SPEED + (Math.random() * 16 - 8);   // 52..68
+        this.v = this.vCruise;
+        this.laneX = this.x;             // where the car is headed, laterally
+        this.vx = 0;
+        this.brake = false;              // feeds the brake lights
+        this.travel = Math.random() * 200;   // own distance, for its wheels
+        this.laneTimer = 260 + Math.random() * 520;
     }
-    /* Traffic is moving too — it drives forward at the brake speed (60), so
-       you reel it in instead of it charging at you. Brake to 60 and you match
-       it exactly; stop dead after a crash and it drives away from you. */
-    update() { this.y += (speed - NPC_SPEED) * 0.08; }
+    /* Traffic is moving too — it drives forward around the brake speed,
+       so you reel it in instead of it charging at you. Brake to 60 and
+       you run with it; stop dead after a crash and it drives away. */
+    update(step = 1, others = []) {
+        const dt = step / 60;
+        /* follow the car ahead (ahead = further up the road = smaller y):
+           ease off to hold a gap, brake properly if it closes up */
+        let targetV = this.vCruise;
+        this.brake = false;
+        for (const o of others) {
+            if (o === this || o.y >= this.y - 1 || Math.abs(o.x - this.x) > 40) continue;
+            const gap = this.y - o.y;
+            const want = 130 + this.v * 0.9;
+            if (gap < want) targetV = Math.min(targetV, o.v - (want - gap) * 0.045);
+            if (gap < 110) targetV = Math.min(targetV, o.v * 0.82);
+        }
+        if (targetV < this.v - 1) this.brake = true;
+        /* engines and brakes are finite here too */
+        const dv = Math.max(-68 * dt, Math.min(26 * dt, targetV - this.v));
+        this.v = Math.max(30, Math.min(78, this.v + dv));
+        this.y += (speed - this.v) * 0.08 * step;
+        this.travel += this.v * 0.08 * step;
+
+        /* --- lane changes: only into a clear gap, eased over ~2s --- */
+        const dx = this.laneX - this.x;
+        if (Math.abs(dx) > 1.2 || Math.abs(this.vx) > 0.05) {
+            const wantVX = Math.max(-0.95, Math.min(0.95, dx * 0.035));
+            this.vx += (wantVX - this.vx) * (1 - Math.pow(0.94, step));
+            this.x += this.vx * step;
+            if (Math.abs(dx) <= 1.2) { this.x = this.laneX; this.vx = 0; }
+        } else {
+            this.vx = 0;
+            this.laneTimer -= step;
+            if (this.laneTimer <= 0) {
+                this.laneTimer = 320 + Math.random() * 620;
+                if (Math.random() < 0.55) this.tryLaneChange(others);
+            }
+        }
+    }
+    tryLaneChange(others) {
+        const lanes = [40, 140, 240, 340, 410];
+        let cur = 0;
+        for (let i = 1; i < lanes.length; i++)
+            if (Math.abs(lanes[i] - this.laneX) < Math.abs(lanes[cur] - this.laneX)) cur = i;
+        const dir = cur === 0 ? 1 : cur === lanes.length - 1 ? -1 : (Math.random() < 0.5 ? -1 : 1);
+        const target = lanes[cur + dir] + (Math.random() * 8 - 4);
+        /* the target lane must be clear by a wide margin, counting cars
+           already on their way into it — and never sideswipe the player */
+        for (const o of others) {
+            if (o === this) continue;
+            if ((Math.abs(o.x - target) < 40 || Math.abs(o.laneX - target) < 40) &&
+                Math.abs(o.y - this.y) < 240) return;
+        }
+        if (player && Math.abs(this.y - player.y) < 190 && Math.abs(player.x - target) < 58) return;
+        this.laneX = target;
+    }
     /* world-space position + the bits the 3D renderer needs */
     get wx() { return wx(this.x + this.w / 2); }
     get wz() { return wz(this.y + this.h / 2); }
-    get steer() { return Math.sin((roadOffset + this.phaseOff) * 0.012) * 0.16; }
+    get steer() {
+        const sway = Math.sin((roadOffset + this.phaseOff) * 0.012) * 0.16;
+        return Math.max(-0.6, Math.min(0.6, sway + (this.vx || 0) * 0.35));
+    }
     get phase() { return roadOffset + this.phaseOff; }
 }
 
@@ -836,7 +1018,7 @@ class Star {
         this.r = 18; const lanes = [50, 150, 250, 350, 420];
         this.x = lanes[Math.floor(Math.random() * lanes.length)]; this.y = SPAWN_Y; this.rot = 0;
     }
-    update() { this.y += speed * 0.08; this.rot += 0.05; }
+    update(step = 1) { this.y += speed * 0.08 * step; this.rot += 0.05 * step; }
     get wx() { return wx(this.x); }
     get wz() { return wz(this.y); }
 }
@@ -848,7 +1030,7 @@ class Particle {
         this.vx = Math.random() * 4 - 2; this.vy = vy; this.alpha = 1; this.size = size;
         this.rgb = parseColor(color);
     }
-    update() { this.x += this.vx; this.y += this.vy; this.alpha -= 0.05; }
+    update(step = 1) { this.x += this.vx * step; this.y += this.vy * step; this.alpha -= 0.05 * step; }
     get wx() { return wx(this.x); }
     get wz() { return wz(this.y); }
     get wy() { return 6 + (1 - this.alpha) * 26; }        /* smoke rises as it fades */
@@ -881,6 +1063,7 @@ function restartGame() {
     roadCentre = null;          // new race, new bends: re-base the slide
     enemies = []; stars = []; particles = []; activeBullets = [];
     score = 0; speed = 0; nitro = START_NITRO; bullets = 0; crashStun = 0;
+    lonAccel = 0; engineLoad = 0;
     reseedCurves();          // a fresh set of bends for every race
     raceTimeLeft = RACE_SECONDS; 
     gameActive = true; screenFlash = 0;
@@ -1036,13 +1219,19 @@ function syncOpponents() {
     world.syncGhosts(ghosts, roadOffset);
 }
 
-function render() {
+function render(ts) {
+    physStep = frameStep(ts);
     /* locked upright: hold the race exactly where it is until they turn round */
     if (orientationLocked) { requestAnimationFrame(render); return; }
-    if(screenShake > 0) { screenShake *= 0.9; if(screenShake < 0.5) screenShake = 0; }
+    if(screenShake > 0) { screenShake *= Math.pow(0.9, physStep); if(screenShake < 0.5) screenShake = 0; }
 
-    /* the steering wheel self-centres the moment you let go of it */
-    if(!wheelGrab && wheelAngle !== 0) wheelSetAngle(Math.abs(wheelAngle) < 0.6 ? 0 : wheelAngle * 0.80);
+    /* the steering wheel self-centres the moment you let go of it --
+       and like a real car's castor, it winds back harder the faster
+       you are going */
+    if(!wheelGrab && wheelAngle !== 0) {
+        const centreF = Math.pow(0.86 - Math.min(1, speed / SPEED_NITRO) * 0.10, physStep);
+        wheelSetAngle(Math.abs(wheelAngle) < 0.6 ? 0 : wheelAngle * centreF);
+    }
 
     if(gameActive) {
         /* steering is the stick's whole job; nitro and brake only kick in
@@ -1052,25 +1241,39 @@ function render() {
         isNitro = nitroReq && nitro > 0;
         brakeActive = brakeReq;
         
-        // --- Nitro Speed set to 560 & Burn Rate set to 0.24 ---
-        if(isNitro) { targetSpeed = SPEED_NITRO; nitro -= 0.24; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
-        else if (brakeReq) targetSpeed = SPEED_BRAKE; else targetSpeed = SPEED_CRUISE; 
-
         /* a crash stops the car dead: no throttle, no nitro burn, 0 KMH on the
            clock for CRASH_STUN frames, then it accelerates away again */
-        if(crashStun > 0) { crashStun--; isNitro = false; targetSpeed = 0; }
+        if(crashStun > 0) { crashStun -= physStep; isNitro = false; }
 
-        speed += (targetSpeed - speed) * 0.08;
-        score += (speed * 0.015);
-        roadOffset += (speed * 0.08);
+        // --- Nitro top speed & burn rate (0.24 per 60fps frame) ---
+        if(isNitro) { targetSpeed = SPEED_NITRO; nitro -= 0.24 * physStep; if(nitro < 0) nitro = 0; screenShake = Math.max(screenShake, 2.0); }
+        else if (brakeReq) targetSpeed = SPEED_BRAKE; else targetSpeed = SPEED_CRUISE;
+
+        /* the force balance: engine, drag, brakes, the hill under the
+           car and the speed scrubbed off by cornering hard */
+        if(crashStun > 0) { speed = 0; lonAccel = 0; engineLoad = 0; }
+        else {
+            const grade = world ? world.roadGrade() : 0;
+            const scrub = player ? Math.abs(player.steer) * Math.abs(player.vx) * 0.9 : 0;
+            lonAccel = longitudinalAccel(speed, targetSpeed, isNitro, brakeReq, grade, scrub);
+            speed = Math.max(0, speed + lonAccel * (physStep / 60));
+        }
+        score += (speed * 0.015) * physStep;
+        roadOffset += (speed * 0.08) * physStep;
 
         /* the note follows the speed: revs climb, the rasp tracks an octave up
-           and the filter opens, so accelerating sounds like accelerating */
+           and the filter opens, so accelerating sounds like accelerating.
+           Revs now climb in gears — each band sweeps up and drops at the
+           shift — and the filter opens wider the harder the engine works. */
         if(engineOsc && audioCtx) {
-            const rev = 45 + speed * 0.55;                      // 45 idle .. 275 flat out
+            const GEARS = [0, 70, 115, 165, 225, 295, 360, 430];
+            let gFrac = 1;
+            for (let gi = 1; gi < GEARS.length; gi++)
+                if (speed < GEARS[gi]) { gFrac = (speed - GEARS[gi - 1]) / (GEARS[gi] - GEARS[gi - 1]); break; }
+            const rev = (45 + speed * 0.55) * (0.88 + 0.24 * gFrac);   // 45 idle .. ~275 flat out
             engineOsc.frequency.setValueAtTime(rev, audioCtx.currentTime);
             engineOsc2.frequency.setValueAtTime(rev * 2.02, audioCtx.currentTime);
-            engineFilter.frequency.setValueAtTime(320 + speed * 7, audioCtx.currentTime);
+            engineFilter.frequency.setValueAtTime(320 + speed * 7 + engineLoad * 450, audioCtx.currentTime);
             /* louder the faster you go, and it howls under nitro, but never
                while the race is over — that mute is set in gameOver() */
             if(engineGain && gameActive) engineGain.gain.setValueAtTime(
@@ -1095,19 +1298,20 @@ function render() {
             lastSyncTime = Date.now();
         }
     } else {
-        speed += (0 - speed) * 0.1;
-        roadOffset += (speed * 0.08);
+        speed *= Math.pow(0.9, physStep);
+        roadOffset += (speed * 0.08) * physStep;
         brakeActive = false;
+        lonAccel = 0; engineLoad = 0;
     }
 
     if(world) {
-        world.scrollRoad(roadOffset);
+        world.scrollRoad(roadOffset, physStep);
         world.addShake(screenShake);
     }
 
     /* ---- bullets: travel forward, kill traffic on contact ---- */
     for(let i = activeBullets.length - 1; i >= 0; i--) {
-        let b = activeBullets[i]; b.y -= 18; let killed = false;
+        let b = activeBullets[i]; b.y -= 18 * physStep; let killed = false;
         for(let j = enemies.length - 1; j >= 0; j--) {
             let e = enemies[j];
             if(b.x > e.x && b.x < e.x + e.w && b.y > e.y && b.y < e.y + e.h) {
@@ -1126,16 +1330,16 @@ function render() {
     if(world) world.syncBullets(activeBullets);
 
     for(let i = particles.length - 1; i >= 0; i--) {
-        particles[i].update();
+        particles[i].update(physStep);
         if(particles[i].alpha <= 0) particles.splice(i,1);
     }
     if(world) world.syncParticles(particles);
 
     /* stars share the far spawn, so a longer road means each one takes far longer
        to arrive: three in flight keeps a pickup reaching you every ~5 s */
-    if(gameActive && Math.random() < 0.022 && stars.length < 3) stars.push(new Star());
+    if(gameActive && chance(0.022) && stars.length < 3) stars.push(new Star());
     for(let i = stars.length - 1; i >= 0; i--) {
-        stars[i].update();
+        stars[i].update(physStep);
         if(gameActive && player && Math.abs(player.x + player.w/2 - stars[i].x) < player.w/2 + stars[i].r && Math.abs(player.y + player.h/2 - stars[i].y) < player.h/2 + stars[i].r) {
             nitro = Math.min(100, nitro + 20); bullets++; updateAmmoUI(); score += 150; playSfx(900, 'sine', 0.25, 0.3);
             for(let k=0; k<15; k++) particles.push(new Particle(stars[i].x, stars[i].y, '#ffea00', (Math.random()-0.5)*8, Math.random()*4+2));
@@ -1145,9 +1349,9 @@ function render() {
     }
     if(world) world.syncStars(stars, roadOffset);
 
-    if(gameActive && Math.random() < 0.075 && enemies.length < MAX_ENEMIES && canSpawn(enemies)) enemies.push(new Enemy());
+    if(gameActive && chance(0.075) && enemies.length < MAX_ENEMIES && canSpawn(enemies)) enemies.push(new Enemy());
     for(let i = enemies.length - 1; i >= 0; i--) {
-        enemies[i].update();
+        enemies[i].update(physStep, enemies);
         if(gameActive && player && !ghostActive && player.x < enemies[i].x + enemies[i].w - 5 && player.x + player.w > enemies[i].x + 5 && player.y < enemies[i].y + enemies[i].h - 5 && player.y + player.h > enemies[i].y + 6) {
             crashInto(enemies[i]);
             enemies.splice(i, 1); continue;
@@ -1163,21 +1367,22 @@ function render() {
     let playerHidden = false;
     if(ghostActive && !gameActive) { ghostActive = false; ghostTimer = 0; updateSkillUI(); }
     if(ghostActive) {
-        ghostTimer--;
+        const was = ghostTimer;
+        ghostTimer -= physStep;
         const period = ghostTimer < 60 ? 4 : 6;             // blinks faster as it runs out
         playerHidden = Math.floor(ghostTimer / period) % 2 === 1;
-        if(ghostTimer % 15 === 0) updateSkillUI();
+        if(Math.floor(was / 15) !== Math.floor(ghostTimer / 15)) updateSkillUI();
         if(ghostTimer <= 0) { ghostActive = false; playerHidden = false; updateSkillUI(); }
     }
 
     if(player) {
-        if(gameActive) player.update();
+        if(gameActive) player.update(physStep);
         player.draw(playerHidden);
     }
 
     if (screenFlash > 0) {
         flashEl.style.opacity = screenFlash;
-        screenFlash -= 0.05;
+        screenFlash -= 0.05 * physStep;
     } else if (flashEl.style.opacity !== '0') {
         flashEl.style.opacity = '0';
     }
